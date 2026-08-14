@@ -2,154 +2,319 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f13">
 <title>RaspberryCar</title>
 <style>
   :root {
-    --bg: #14161a; --panel: #1e2228; --line: #2e343d; --sunken: #171b21;
-    --text: #e8ecf1; --muted: #8b95a3; --accent: #4da3ff;
-    --ok: #3ecf8e; --warn: #ffb02e; --bad: #ff5c5c; --off: #5a636e;
+    --bg:       #0d0f13;
+    --surface:  #161a21;
+    --raised:   #1d232c;
+    --sunken:   #11141a;
+    --line:     #262e3a;
+    --line-soft:#1e242e;
+
+    --text:  #e7ecf4;
+    --muted: #8a94a6;
+    --dim:   #596375;
+
+    --accent:     #4d9fff;
+    --accent-ink: #06182e;
+    --ok:         #32d6a0;
+    --ok-ink:     #032018;
+    --warn:       #ffb340;
+    --bad:        #ff5f6d;
+
+    --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+    --edge: inset 0 1px 0 rgba(255,255,255,.045);
   }
+
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0 auto; padding: 0 12px 24px; background: var(--bg); color: var(--text);
-    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 780px;
+    margin: 0 auto; padding: 0 14px calc(28px + env(safe-area-inset-bottom));
+    max-width: 820px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* ---- status bar: always visible, always tells you what it is doing ---- */
+  /* ══ status bar ══════════════════════════════════════════════════════ */
   #bar {
-    position: sticky; top: 0; z-index: 20; margin: 0 -12px 12px; padding: 10px 12px;
-    background: rgba(20, 22, 26, .94); backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 30; margin: 0 -14px 14px;
+    padding: 11px 14px calc(11px + env(safe-area-inset-top, 0px));
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: linear-gradient(180deg, rgba(13,15,19,.97), rgba(13,15,19,.88));
+    backdrop-filter: blur(12px) saturate(1.3);
+    border-bottom: 1px solid var(--line-soft);
   }
-  #bar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
-  #bar .dot.live { background: var(--ok); } #bar .dot.dead { background: var(--bad); }
-  #state { font-weight: 650; font-size: 15px; }
-  #state small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+  /* Wide: name, then chips, then stop at the far right. Orders are written out
+     rather than left to the default so the mobile override below is a simple
+     swap instead of a fight with source order. */
+  #pulse { order: 1; } #state { order: 2; }
+  #movechip, #safechip { order: 5; }
+  #estop { order: 9; }
+  #pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none;
+           transition: background .25s, box-shadow .25s; }
+  #pulse.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(50,214,160,.16); }
+  #pulse.dead { background: var(--bad); box-shadow: 0 0 0 3px rgba(255,95,109,.16); }
+
+  #state { min-width: 0; flex: 1; }
+  #state b { display: block; font-size: 15px; font-weight: 650; letter-spacing: -.01em;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #state small { display: block; font-size: 11px; color: var(--muted); font-weight: 400;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
   .chip {
-    font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--sunken); color: var(--muted);
-    white-space: nowrap;
+    font-size: 11px; font-weight: 600; letter-spacing: .01em; padding: 5px 10px;
+    border-radius: 999px; white-space: nowrap; flex: none;
+    background: var(--raised); border: 1px solid var(--line); color: var(--muted);
+    box-shadow: var(--edge); transition: all .2s;
   }
-  .chip.moving { background: #14332a; border-color: #1f5d47; color: var(--ok); }
-  .chip.warn   { background: #3a2f1c; border-color: #6a5324; color: var(--warn); }
-  .chip.bad    { background: #3a2226; border-color: #6a3339; color: var(--bad); }
+  .chip.go   { background: rgba(50,214,160,.14); border-color: rgba(50,214,160,.35); color: var(--ok); }
+  .chip.warn { background: rgba(255,179,64,.14); border-color: rgba(255,179,64,.38); color: var(--warn); }
+  .chip.bad  { background: rgba(255,95,109,.14); border-color: rgba(255,95,109,.38); color: var(--bad); }
+
   #estop {
-    margin-left: auto; padding: 9px 18px; font-size: 13px; font-weight: 700;
-    border-radius: 8px; cursor: pointer; letter-spacing: .04em;
-    background: #3a2226; color: #ff8f8f; border: 1px solid #5c3339;
+    flex: none; padding: 10px 18px; font-size: 12px; font-weight: 750; letter-spacing: .08em;
+    border-radius: var(--r-sm); color: #ffb3b8;
+    background: linear-gradient(180deg, #3d2429, #2e1b1f);
+    border: 1px solid #5e3339; box-shadow: var(--edge);
+    transition: transform .1s, background .15s;
   }
-  #estop:active { background: var(--bad); border-color: var(--bad); color: #1a0000; }
+  #estop:hover { background: linear-gradient(180deg, #4a2b31, #382126); }
+  #estop:active { transform: translateY(1px); background: var(--bad); color: #240004; border-color: var(--bad); }
 
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-       color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .panel { background: var(--panel); border: 1px solid var(--line);
-           border-radius: 10px; padding: 12px; margin-top: 12px; }
+  /* ══ panels ══════════════════════════════════════════════════════════ */
+  .panel {
+    background: linear-gradient(180deg, var(--surface), #13171d);
+    border: 1px solid var(--line-soft); border-radius: var(--r-lg);
+    padding: 16px; margin-top: 14px; box-shadow: var(--shadow), var(--edge);
+  }
+  .panel > h2 {
+    margin: 0 0 14px; font-size: 11px; font-weight: 650; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--dim);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .panel > h2 em { font-style: normal; text-transform: none; letter-spacing: 0;
+                   font-weight: 400; font-size: 11.5px; color: #4b5566; }
 
-  /* ---- video ---- */
-  #stage { position: relative; }
-  #view { width: 100%; border-radius: 10px; background: #000; display: block;
-          aspect-ratio: 16/9; object-fit: contain; }
+  /* ══ video ═══════════════════════════════════════════════════════════ */
+  #stage {
+    position: relative; border-radius: var(--r-lg); overflow: hidden;
+    background: #000; box-shadow: var(--shadow); border: 1px solid var(--line-soft);
+  }
+  #view { width: 100%; display: block; aspect-ratio: 16/9; object-fit: contain; background: #000; }
   #stage.pickable #view { cursor: crosshair; }
-  #pickhint {
-    position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 4px 9px;
-    border-radius: 999px; background: rgba(0,0,0,.6); color: #cfe4fb; pointer-events: none;
+
+  .hud { position: absolute; display: flex; gap: 6px; align-items: center; pointer-events: none; }
+  .hud.tl { top: 10px; left: 10px; }
+  .hud.tr { top: 10px; right: 10px; }
+  .hud.bl { bottom: 10px; left: 10px; }
+  .hud span {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .04em; padding: 4px 9px;
+    border-radius: 999px; background: rgba(10,12,16,.72); backdrop-filter: blur(6px);
+    color: #cfd8e6; border: 1px solid rgba(255,255,255,.07);
+    font-variant-numeric: tabular-nums;
   }
+  .hud span.rec { color: #ff8a92; }
+  .hud span.rec::before {
+    content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; margin-right: 6px; vertical-align: 1px;
+    animation: blink 2s ease-in-out infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+
   #flash {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    font-size: 14px; font-weight: 650; color: #08121f; pointer-events: none; opacity: 0;
-    transition: opacity .25s;
+    position: absolute; inset: 0; display: grid; place-items: center;
+    pointer-events: none; opacity: 0; transition: opacity .2s;
   }
-  #flash span { background: var(--accent); padding: 8px 16px; border-radius: 8px; }
   #flash.show { opacity: 1; }
-
-  /* ---- behaviour groups ---- */
-  .group + .group { margin-top: 14px; }
-  .group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-              color: var(--muted); margin: 0 0 7px; font-weight: 600; }
-  .group h3 em { font-style: normal; color: #5f6874; text-transform: none;
-                 letter-spacing: 0; font-weight: 400; margin-left: 6px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-  button.opt {
-    padding: 11px 12px; border-radius: 9px; cursor: pointer; text-align: left;
-    background: #262c34; color: var(--text); border: 1px solid var(--line);
-    font-size: 14px; font-weight: 600; line-height: 1.25;
+  #flash span {
+    background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: 13.5px;
+    padding: 9px 18px; border-radius: 999px; box-shadow: 0 6px 24px rgba(77,159,255,.4);
   }
-  button.opt small { display: block; font-weight: 400; font-size: 11px;
-                     color: var(--muted); margin-top: 3px; }
-  button.opt.active { background: var(--accent); border-color: var(--accent); color: #08121f; }
-  button.opt.active small { color: #0d2743; }
-  button.opt:disabled { opacity: .4; cursor: not-allowed; }
 
-  #bstatus { margin-top: 12px; font-size: 12px; color: var(--muted);
-             font-variant-numeric: tabular-nums; }
+  /* ══ behaviour groups ════════════════════════════════════════════════ */
+  .group + .group { margin-top: 16px; }
+  .group h3 {
+    margin: 0 0 8px; font-size: 10.5px; font-weight: 650; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .group h3 em { font-style: normal; text-transform: none; letter-spacing: 0;
+                 font-weight: 400; color: #4b5566; margin-left: 7px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 9px; }
+
+  button.opt {
+    padding: 12px 13px; text-align: left; border-radius: var(--r-md);
+    background: linear-gradient(180deg, var(--raised), #191f27);
+    border: 1px solid var(--line); box-shadow: var(--edge);
+    font-size: 14px; font-weight: 620; line-height: 1.3; letter-spacing: -.005em;
+    transition: transform .12s, border-color .15s, background .15s;
+  }
+  button.opt small { display: block; margin-top: 4px; font-size: 11px; font-weight: 400;
+                     line-height: 1.35; color: var(--muted); }
+  button.opt:hover:not(:disabled) { border-color: #33404f; transform: translateY(-1px); }
+  button.opt:active:not(:disabled) { transform: translateY(0); }
+  button.opt.active {
+    background: linear-gradient(180deg, #4da3ff, #3b8ae6);
+    border-color: #6fb4ff; color: var(--accent-ink);
+    box-shadow: 0 4px 16px -4px rgba(77,159,255,.5), inset 0 1px 0 rgba(255,255,255,.25);
+  }
+  button.opt.active small { color: rgba(6,24,46,.72); }
+  button.opt:disabled { opacity: .35; cursor: not-allowed; }
+
+  #bstatus { margin-top: 14px; font-size: 12px; color: var(--muted);
+             font-variant-numeric: tabular-nums; line-height: 1.6; }
   #bstatus.err { color: var(--bad); }
-  #safety { margin-top: 8px; font-size: 12px; padding: 8px 10px; border-radius: 8px;
-            background: var(--sunken); color: var(--muted); }
-  #safety.active { background: #3a2f1c; color: var(--warn); }
-  #tree { margin: 10px 0 0; padding: 10px; background: var(--sunken); border-radius: 8px;
-          font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-          color: var(--muted); overflow-x: auto; white-space: pre; }
+
+  #safety {
+    margin-top: 10px; padding: 10px 12px; border-radius: var(--r-sm); font-size: 12px;
+    background: var(--sunken); border: 1px solid var(--line-soft); color: var(--muted);
+    transition: all .2s;
+  }
+  #safety.active { background: rgba(255,179,64,.1); border-color: rgba(255,179,64,.3); color: var(--warn); }
+  #safety.off    { background: rgba(255,95,109,.1); border-color: rgba(255,95,109,.3); color: var(--bad); }
+
+  #tree {
+    margin: 12px 0 0; padding: 12px 14px; border-radius: var(--r-sm); overflow-x: auto;
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    font: 11.5px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--dim); white-space: pre;
+  }
   #tree:empty { display: none; }
-  #tree .running { color: var(--accent); font-weight: 600; }
+  #tree .running { color: var(--accent); font-weight: 650; }
   #tree .success { color: var(--ok); }
   #tree .failure { color: var(--bad); }
-  #tree .detail  { color: #6b7480; }
+  #tree .detail  { color: #4b5566; }
 
-  /* ---- telemetry ---- */
-  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
-  .tel div { background: var(--sunken); border-radius: 8px; padding: 8px 10px; }
-  .tel span { display: block; color: var(--muted); font-size: 11px;
-              text-transform: uppercase; letter-spacing: .04em; }
-  .tel b { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-
-  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .row + .row { margin-top: 10px; }
-  .row label { font-size: 13px; color: var(--muted); }
-  button.toggle {
-    padding: 9px 16px; font-size: 13px; font-weight: 600; border-radius: 8px;
-    cursor: pointer; background: #262c34; color: var(--text); border: 1px solid var(--line);
+  /* ══ object chips ════════════════════════════════════════════════════ */
+  #objects { display: flex; flex-wrap: wrap; gap: 7px; min-height: 30px; align-items: center; }
+  #objects button {
+    padding: 6px 13px; border-radius: 999px; font-size: 12.5px; font-weight: 550;
+    background: rgba(77,159,255,.1); border: 1px solid rgba(77,159,255,.26); color: #a9cdf7;
+    font-variant-numeric: tabular-nums; transition: all .15s;
   }
-  button.toggle.on { background: var(--ok); border-color: var(--ok); color: #05231a; }
-  input[type=range] { flex: 1; accent-color: var(--accent); }
+  #objects button:hover { background: rgba(77,159,255,.18); border-color: rgba(77,159,255,.5); }
+  #objects button.locked {
+    background: linear-gradient(180deg, #4da3ff, #3b8ae6); border-color: #6fb4ff;
+    color: var(--accent-ink); font-weight: 650;
+    box-shadow: 0 3px 12px -3px rgba(77,159,255,.55);
+  }
+  #objects .none { color: var(--dim); font-size: 12.5px; }
+
+  /* ══ rows, toggles, inputs ═══════════════════════════════════════════ */
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row + .row { margin-top: 11px; }
+  .row > label { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+  button.toggle {
+    padding: 9px 15px; font-size: 12.5px; font-weight: 620; border-radius: var(--r-sm);
+    background: linear-gradient(180deg, var(--raised), #191f27);
+    border: 1px solid var(--line); box-shadow: var(--edge); transition: all .15s;
+  }
+  button.toggle:hover { border-color: #33404f; }
+  button.toggle.on {
+    background: linear-gradient(180deg, #32d6a0, #24b686); border-color: #4fe3b4;
+    color: var(--ok-ink); box-shadow: 0 3px 12px -3px rgba(50,214,160,.45), inset 0 1px 0 rgba(255,255,255,.25);
+  }
+
+  input[type=range] {
+    flex: 1; min-width: 90px; height: 4px; -webkit-appearance: none; appearance: none;
+    background: var(--line); border-radius: 999px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 2px solid #0d0f13; cursor: pointer;
+    box-shadow: 0 1px 6px rgba(77,159,255,.5);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
+    border: 2px solid #0d0f13; cursor: pointer;
+  }
   input[type=text] {
-    flex: 1; min-width: 120px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+    flex: 1; min-width: 130px; padding: 9px 12px; border-radius: var(--r-sm); font-size: 13px;
     background: var(--sunken); border: 1px solid var(--line); color: var(--text);
   }
-  #objects { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 24px; }
-  #objects button {
-    background: #22303f; border: 1px solid #2f4459; color: #bcd8f5; border-radius: 999px;
-    padding: 4px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
-  }
-  #objects button:hover { border-color: var(--accent); }
-  #objects button.locked { background: var(--accent); border-color: var(--accent); color: #08121f; }
-  #objects .none { color: var(--muted); font-size: 12px; padding: 4px 0; }
+  input[type=text]::placeholder { color: var(--dim); }
+  input[type=text]:focus { border-color: var(--accent); outline: none; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 12.5px; min-width: 34px; }
 
+  /* ══ d-pad ═══════════════════════════════════════════════════════════ */
   .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   button.k {
-    padding: 17px 0; font-size: 19px; font-weight: 600; color: var(--text);
-    background: #262c34; border: 1px solid var(--line); border-radius: 10px;
-    touch-action: manipulation; user-select: none; cursor: pointer;
+    padding: 18px 0; font-size: 18px; font-weight: 600; border-radius: var(--r-md);
+    background: linear-gradient(180deg, var(--raised), #191f27);
+    border: 1px solid var(--line); box-shadow: var(--edge);
+    touch-action: manipulation; user-select: none;
+    transition: transform .08s, background .12s, border-color .12s;
   }
-  button.k:active, button.k.on { background: var(--accent); border-color: var(--accent); color: #08121f; }
-  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  button.k:hover { border-color: #33404f; }
+  button.k:active, button.k.on {
+    background: linear-gradient(180deg, #4da3ff, #3b8ae6); border-color: #6fb4ff;
+    color: var(--accent-ink); transform: scale(.97);
+    box-shadow: 0 4px 16px -4px rgba(77,159,255,.5);
+  }
+  button.k.mini { padding: 13px 0; font-size: 12.5px; font-weight: 600; }
+
+  /* ══ telemetry ═══════════════════════════════════════════════════════ */
+  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 9px; }
+  .tel div {
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm); padding: 9px 11px;
+  }
+  .tel span { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: .07em;
+              text-transform: uppercase; color: var(--dim); margin-bottom: 3px; }
+  .tel b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums;
+           letter-spacing: -.02em; }
+
+  #spark { display: block; width: 100%; height: 40px; margin-top: 12px;
+           background: var(--sunken); border: 1px solid var(--line-soft);
+           border-radius: var(--r-sm); }
+
+  .hint { margin: 12px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--dim); }
+  .hint b { color: var(--muted); font-weight: 600; }
+  kbd {
+    display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 11px;
+    font-family: ui-monospace, Menlo, monospace; color: var(--muted);
+    background: var(--raised); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line);
+  }
   .warn { color: var(--warn); }
+
+  /* ══ narrow screens ══════════════════════════════════════════════════ */
+  @media (max-width: 440px) {
+    /* Give the behaviour name a full line -- "Search and approach" does not
+       fit beside two chips and a stop button -- and let the chips drop below.
+       The stop button stays on the first row, where a thumb expects it. */
+    /* Stop button joins the name on row one, chips drop to row two. */
+    #state { flex: 1 1 auto; }
+    #estop { order: 3; }
+    #bar { row-gap: 8px; }
+    .grid { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 8px; }
+    .panel { padding: 14px; border-radius: var(--r-md); }
+    .tel { grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); }
+    button.k { padding: 20px 0; }        /* bigger thumb targets */
+  }
 </style>
 </head>
 <body>
 
 <div id="bar">
-  <span class="dot" id="link"></span>
-  <span id="state">—<small id="substate"></small></span>
+  <span id="pulse"></span>
+  <span id="state"><b id="statename">—</b><small id="substate"></small></span>
+  <button id="estop">STOP</button>
   <span class="chip" id="movechip">idle</span>
   <span class="chip" id="safechip">safety</span>
-  <button id="estop">STOP</button>
 </div>
 
 <div id="stage">
   <img id="view" src="/stream.mjpg" alt="camera stream">
-  <div id="pickhint" hidden>tap an object to track it</div>
+  <div class="hud tl"><span class="rec" id="hudlive">LIVE</span><span id="hudfps">-- fps</span></div>
+  <div class="hud tr"><span id="huddet" hidden>0 objects</span></div>
+  <div class="hud bl"><span id="hudhint" hidden>tap an object to track</span></div>
   <div id="flash"><span></span></div>
 </div>
 
@@ -162,35 +327,42 @@
 </div>
 
 <div class="panel">
-  <h2>Seen right now <span style="text-transform:none;letter-spacing:0;font-weight:400">— tap to track</span></h2>
+  <h2>Seen right now <em>tap to track</em></h2>
   <div id="objects"><span class="none">detection off</span></div>
-  <div class="row" style="margin-top:12px">
-    <button class="toggle on" id="cambtn">Camera: on</button>
-    <button class="toggle" id="detbtn">Detection: off</button>
-    <button class="toggle on" id="safebtn">Safety: on</button>
+  <div class="row" style="margin-top:14px">
+    <button class="toggle on" id="cambtn">Camera</button>
+    <button class="toggle" id="detbtn">Detection</button>
+    <button class="toggle on" id="safebtn">Safety</button>
   </div>
   <div class="row">
-    <label>conf <b id="confval">0.40</b></label>
+    <label>confidence</label><span class="val" id="confval">0.40</span>
     <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
-    <input type="text" id="target" placeholder="or type a target">
+  </div>
+  <div class="row">
+    <input type="text" id="target" placeholder="or type a target, e.g. bottle">
     <button class="toggle" id="settarget">Track</button>
   </div>
 </div>
 
 <div class="panel">
-  <h2>Manual control <span id="dof" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
-  <div class="row"><label>Speed</label><input type="range" id="speed" min="20" max="100" value="60"><b id="speedval">60%</b></div>
-  <div class="pad" style="margin-top:10px">
+  <h2>Manual control <em id="dof"></em></h2>
+  <div class="row">
+    <label>speed</label><span class="val" id="speedval">60%</span>
+    <input type="range" id="speed" min="20" max="100" value="60">
+  </div>
+  <div class="pad" style="margin-top:14px">
     <span></span><button class="k" data-vx="1">▲</button><span></span>
     <button class="k" data-om="-1">↺</button>
-    <button class="k" data-vx="0" data-om="0" id="coast">•</button>
+    <button class="k mini" data-vx="0" data-om="0">coast</button>
     <button class="k" data-om="1">↻</button>
     <span></span><button class="k" data-vx="-1">▼</button><span></span>
   </div>
   <div class="pad" id="strafepad" style="margin-top:10px; display:none">
-    <button class="k" data-vy="-1">◀ strafe</button><span></span><button class="k" data-vy="1">strafe ▶</button>
+    <button class="k mini" data-vy="-1">◀ strafe</button>
+    <span></span>
+    <button class="k mini" data-vy="1">strafe ▶</button>
   </div>
-  <p class="hint">Driving switches to Manual automatically. <b>W A S D</b> drive and turn, <b>Q E</b> strafe, space stops.</p>
+  <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · <kbd>space</kbd> stops.</p>
 </div>
 
 <div class="panel">
@@ -202,21 +374,22 @@
     <div><span>ω turn</span><b id="om">0.00</b></div>
     <div><span>Proximity</span><b id="prox">--</b></div>
     <div><span>Floor</span><b id="floor">--</b></div>
-    <div><span>Stream fps</span><b id="sfps">--</b></div>
-    <div><span>Detect fps</span><b id="dfps">--</b></div>
+    <div><span>Stream</span><b id="sfps">--</b></div>
+    <div><span>Detect</span><b id="dfps">--</b></div>
     <div><span>Gamepad</span><b id="gp">none</b></div>
   </div>
+  <canvas id="spark" width="760" height="80" title="range over the last 30 seconds"></canvas>
   <p class="hint" id="hw"></p>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-const link = $('link'), speed = $('speed');
+const pulse = $('pulse'), speed = $('speed');
 
 let vx = 0, vy = 0, om = 0, lastMoving = false;
 let activeBehavior = null, padActive = false;
 let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
-let detections = [], currentTarget = null, acceptsTarget = false;
+let detections = [], currentTarget = null;
 
 speed.oninput = () => $('speedval').textContent = speed.value + '%';
 const scale = () => speed.value / 100;
@@ -228,9 +401,9 @@ async function post(url, body) {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body || {})
     });
-    link.className = 'dot live';
+    pulse.className = 'live';
     return await r.json();
-  } catch (e) { link.className = 'dot dead'; return null; }
+  } catch (e) { pulse.className = 'dead'; return null; }
 }
 
 function flash(text) {
@@ -243,8 +416,8 @@ function flash(text) {
 
 // ---- driving ------------------------------------------------------------
 // Re-sends the current command ~10x/sec. The robot cuts the motors if it stops
-// hearing from us, so a dropped connection halts the car rather than leaving
-// it running at its last speed.
+// hearing from us, so a dropped connection halts the car rather than leaving it
+// running at its last speed.
 setInterval(() => {
   const moving = vx || vy || om;
   if (moving) {
@@ -261,9 +434,8 @@ const halt = () => { setV(0, 0, 0); post('/api/stop'); lastMoving = false; };
 $('estop').onclick = halt;
 
 // ---- picking a target ---------------------------------------------------
-// Maps a click on the <img> back into camera pixels. object-fit: contain means
-// the frame is letterboxed inside the element, so the bars have to come out
-// before the coordinates mean anything.
+// Maps a click on the <img> back into camera pixels. object-fit: contain
+// letterboxes the frame inside the element, so the bars come out first.
 function toFrame(img, clientX, clientY) {
   const rect = img.getBoundingClientRect();
   const nw = img.naturalWidth, nh = img.naturalHeight;
@@ -273,15 +445,14 @@ function toFrame(img, clientX, clientY) {
   const y = (clientY - rect.top - (rect.height - nh * s) / 2) / s;
   return (x < 0 || y < 0 || x > nw || y > nh) ? null : {x, y};
 }
-
 const boxArea = d => (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
 
 $('view').addEventListener('click', e => {
   if (!detections.length) return;
   const p = toFrame(e.currentTarget, e.clientX, e.clientY);
   if (!p) return;
-  // Smallest box containing the point, so tapping something inside a large
-  // box picks the small thing rather than its container.
+  // Smallest box containing the point, so tapping something inside a large box
+  // picks the small thing rather than its container.
   const hit = detections
     .filter(d => d.box && p.x >= d.box[0] && p.x <= d.box[2] && p.y >= d.box[1] && p.y <= d.box[3])
     .sort((a, b) => boxArea(a) - boxArea(b))[0];
@@ -293,17 +464,16 @@ async function track(label) {
   if (r && r.error) flash(r.error);
   else { flash('tracking ' + label); loadBehaviors(); }
 }
-
 $('settarget').onclick = () => { const v = $('target').value.trim(); if (v) track(v); };
 $('target').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('settarget').click();
   e.stopPropagation();
 });
 
-// ---- behaviours, grouped ------------------------------------------------
+// ---- behaviours, grouped by kind ----------------------------------------
 const GROUPS = [
-  ['control', 'Control', 'always available'],
-  ['skill',   'Skills',  'one capability, runs until you stop it'],
+  ['control', 'Control',  'always available'],
+  ['skill',   'Skills',   'one capability, runs until you stop it'],
   ['mission', 'Missions', 'a task with a goal — succeeds or fails'],
 ];
 
@@ -336,13 +506,13 @@ async function loadBehaviors() {
       group.appendChild(grid);
       box.appendChild(group);
     });
-  } catch (e) { link.className = 'dot dead'; }
+  } catch (e) { pulse.className = 'dead'; }
 }
 
 // ---- toggles ------------------------------------------------------------
-function applyCamera(on) { cameraOn = on; $('cambtn').textContent = 'Camera: ' + (on ? 'on' : 'off'); $('cambtn').classList.toggle('on', on); }
-function applyDetect(on) { detectOn = on; $('detbtn').textContent = 'Detection: ' + (on ? 'on' : 'off'); $('detbtn').classList.toggle('on', on); }
-function applySafety(on) { safetyOn = on; $('safebtn').textContent = 'Safety: ' + (on ? 'on' : 'off'); $('safebtn').classList.toggle('on', on); }
+function applyCamera(on) { cameraOn = on; $('cambtn').classList.toggle('on', on); }
+function applyDetect(on) { detectOn = on; $('detbtn').classList.toggle('on', on); }
+function applySafety(on) { safetyOn = on; $('safebtn').classList.toggle('on', on); }
 
 $('cambtn').onclick = async () => { const r = await post('/api/camera', {enabled: !cameraOn}); if (r && !r.error) applyCamera(r.enabled); };
 $('detbtn').onclick = async () => { const r = await post('/api/detect', {enabled: !detectOn}); if (r && !r.error) applyDetect(r.enabled); };
@@ -351,7 +521,7 @@ $('safebtn').onclick = async () => { const r = await post('/api/safety', {enable
 $('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
 $('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
 
-// ---- touch / mouse / keyboard / gamepad ---------------------------------
+// ---- touch / keyboard / gamepad -----------------------------------------
 document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]').forEach(btn => {
   const press = e => {
     e.preventDefault();
@@ -387,7 +557,7 @@ const DEAD = 0.12, dz = v => Math.abs(v) < DEAD ? 0 : v;
 function pollPad() {
   const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(p => p);
   if (pad) {
-    $('gp').textContent = 'connected';
+    $('gp').textContent = 'on';
     const f = dz(-pad.axes[1]);
     const s = dof >= 3 ? dz(pad.axes[0]) : 0;
     const t = dz(pad.axes[2] !== undefined ? pad.axes[2] : 0);
@@ -403,7 +573,7 @@ requestAnimationFrame(pollPad);
 function renderTree(node, prefix = '', isLast = true, isRoot = true) {
   const mark = {running: '▶', success: '✓', failure: '✗'}[node.status] || '·';
   const branch = isRoot ? '' : (isLast ? '└─ ' : '├─ ');
-  const detail = node.detail ? ' <span class="detail">' + esc(node.detail) + '</span>' : '';
+  const detail = node.detail ? '  <span class="detail">' + esc(node.detail) + '</span>' : '';
   let out = prefix + branch + '<span class="' + (node.status || '') + '">' +
             mark + ' ' + esc(node.name) + '</span>' + detail + '\n';
   const kids = node.children || [];
@@ -412,12 +582,9 @@ function renderTree(node, prefix = '', isLast = true, isRoot = true) {
   return out;
 }
 
-// ---- the "seen right now" chips -----------------------------------------
-// Only rebuilt when the set of labels changes. Recreating the buttons on every
-// poll would swallow a tap that landed mid-refresh, which is exactly when
-// someone is most likely to be aiming at one.
+// ---- object chips -------------------------------------------------------
 const seenAt = new Map();     // label -> when it was last detected
-const LINGER = 2500;          // keep a chip this long after it drops out
+const LINGER = 2500;
 
 function renderObjects(d) {
   const box = $('objects');
@@ -426,17 +593,12 @@ function renderObjects(d) {
   // Detections near the confidence threshold blink in and out, so a label
   // lingers a moment after its last sighting.
   detections.forEach(o => seenAt.set(o.label, now));
-  for (const [label, when] of seenAt) {
-    if (now - when > LINGER) seenAt.delete(label);
-  }
+  for (const [label, when] of seenAt) if (now - when > LINGER) seenAt.delete(label);
   const labels = [...seenAt.keys()].sort();
 
   // Reconcile rather than re-render: buttons that should still be there are
-  // left alone, so a tap can never land on an element that is about to be
-  // replaced. Rebuilding the list wholesale was swallowing clicks.
-  const existing = new Map(
-    [...box.querySelectorAll('button')].map(b => [b.dataset.label, b])
-  );
+  // left alone, so a tap can never land on an element about to be replaced.
+  const existing = new Map([...box.querySelectorAll('button')].map(b => [b.dataset.label, b]));
   for (const [label, el] of existing) {
     if (!labels.includes(label)) { el.remove(); existing.delete(label); }
   }
@@ -451,11 +613,10 @@ function renderObjects(d) {
       b.onclick = () => track(label);
       box.appendChild(b);
     }
-    const best = detections
-      .filter(o => o.label === label)
+    const best = detections.filter(o => o.label === label)
       .reduce((a, o) => (!a || o.conf > a.conf ? o : a), null);
     b.textContent = best ? label + ' ' + best.conf.toFixed(2) : label + ' —';
-    b.style.opacity = best ? '1' : '.5';
+    b.style.opacity = best ? '1' : '.45';
     b.classList.toggle('locked',
       !!currentTarget && label.toLowerCase() === String(currentTarget).toLowerCase());
   });
@@ -467,68 +628,108 @@ function renderObjects(d) {
     if (note) note.textContent = text;
     else {
       const el = document.createElement('span');
-      el.className = 'none';
-      el.textContent = text;
+      el.className = 'none'; el.textContent = text;
       box.appendChild(el);
     }
   }
+}
+
+// ---- range sparkline ----------------------------------------------------
+const history = [];
+const HISTORY = 60;           // 60 samples at 2 Hz == the last 30 seconds
+
+function drawSpark() {
+  const c = $('spark'), ctx = c.getContext('2d');
+  const w = c.width, h = c.height, pad = 6;
+  ctx.clearRect(0, 0, w, h);
+  if (history.length < 2) return;
+
+  const max = Math.max(60, ...history);
+  const x = i => (i / (HISTORY - 1)) * w;
+  const y = v => h - pad - (v / max) * (h - pad * 2);
+
+  ctx.beginPath();
+  history.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, 'rgba(77,159,255,.28)');
+  grad.addColorStop(1, 'rgba(77,159,255,0)');
+  ctx.lineTo(x(history.length - 1), h); ctx.lineTo(x(0), h); ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+
+  ctx.beginPath();
+  history.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+  ctx.strokeStyle = '#4d9fff'; ctx.lineWidth = 1.6;
+  ctx.lineJoin = 'round'; ctx.stroke();
 }
 
 // ---- telemetry ----------------------------------------------------------
 async function telemetry() {
   try {
     const d = await (await fetch('/api/telemetry')).json();
-    link.className = 'dot live';
+    pulse.className = 'live';
 
-    // -- status bar --
-    $('state').firstChild.textContent = d.behavior_label;
+    // status bar
+    $('statename').textContent = d.behavior_label;
     const st = d.behavior_status || {};
     $('substate').textContent = d.behavior_error || st.state || st.path || st.reason || '';
     currentTarget = st.target || null;
-    acceptsTarget = !!d.accepts_target;
 
     const mv = $('movechip');
     mv.textContent = d.moving ? 'moving' : 'idle';
-    mv.className = 'chip' + (d.moving ? ' moving' : '');
+    mv.className = 'chip' + (d.moving ? ' go' : '');
 
     const sf = d.safety || {};
     const sc = $('safechip');
     if (sf.enabled === false) { sc.textContent = 'safety off'; sc.className = 'chip bad'; }
-    else if (sf.intervened) { sc.textContent = 'safety holding'; sc.className = 'chip warn'; }
+    else if (sf.intervened) { sc.textContent = 'holding'; sc.className = 'chip warn'; }
     else { sc.textContent = 'safety ok'; sc.className = 'chip'; }
 
-    // -- behaviour detail --
+    // behaviour detail
     if (d.behavior !== activeBehavior) { activeBehavior = d.behavior; loadBehaviors(); }
     if (d.behavior_error) { $('bstatus').textContent = d.behavior_error; $('bstatus').className = 'err'; }
     else {
       $('bstatus').textContent = Object.entries(st).filter(([k]) => k !== 'tree')
-        .map(([k, v]) => k + ': ' + v).join('  ·  ');
+        .map(([k, v]) => k + ': ' + v).join('   ·   ');
       $('bstatus').className = '';
     }
     $('tree').innerHTML = st.tree ? renderTree(st.tree) : '';
 
-    $('safety').className = sf.intervened ? 'active' : '';
-    $('safety').textContent = sf.intervened ? '⚠ ' + sf.reasons.join('; ')
-      : (sf.enabled === false ? 'safety layer: DISABLED' : 'safety layer: clear');
+    const safeEl = $('safety');
+    safeEl.className = sf.intervened ? 'active' : (sf.enabled === false ? 'off' : '');
+    safeEl.textContent = sf.intervened ? '⚠  ' + sf.reasons.join(';  ')
+      : (sf.enabled === false ? 'safety layer disabled — nothing is being clamped'
+                              : 'safety layer: clear');
 
-    // -- detections, tappable --
+    // video overlays
     detections = d.objects || [];
-    const stage = $('stage');
-    stage.classList.toggle('pickable', detections.length > 0);
-    $('pickhint').hidden = !detections.length;
+    $('stage').classList.toggle('pickable', detections.length > 0);
+    $('hudlive').textContent = d.camera_enabled ? 'LIVE' : 'OFF';
+    $('hudlive').style.color = d.camera_enabled ? '' : 'var(--dim)';
+    $('hudfps').textContent = d.camera_enabled ? (d.stream_fps || '--') + ' fps' : '';
+    $('hudfps').hidden = !d.camera_enabled;
+    $('huddet').hidden = !d.detect_enabled;
+    $('huddet').textContent = detections.length +
+      (detections.length === 1 ? ' object' : ' objects');
+    $('hudhint').hidden = !detections.length;
 
     renderObjects(d);
 
-    // -- diagnostics --
+    // diagnostics
     const a = d.allowed || {vx: 0, vy: 0, omega: 0};
     $('range').textContent = d.range_cm === null ? '--' : d.range_cm + ' cm';
     $('vx').textContent = a.vx.toFixed(2);
     $('vy').textContent = a.vy.toFixed(2);
     $('om').textContent = a.omega.toFixed(2);
-    $('prox').textContent = d.proximity ? (d.proximity.left ? 'L' : '-') + ' / ' + (d.proximity.right ? 'R' : '-') : '--';
-    $('floor').textContent = d.floor ? (d.floor.left ? '1' : '0') + ' / ' + (d.floor.right ? '1' : '0') : '--';
+    $('prox').textContent = d.proximity ? (d.proximity.left ? 'L' : '·') + ' ' + (d.proximity.right ? 'R' : '·') : '--';
+    $('floor').textContent = d.floor ? (d.floor.left ? '1' : '0') + ' ' + (d.floor.right ? '1' : '0') : '--';
     $('sfps').textContent = d.camera_enabled ? (d.stream_fps || '--') : 'off';
     $('dfps').textContent = d.detect_enabled ? (d.detect_fps || '...') : 'off';
+
+    if (d.range_cm !== null && d.range_cm !== undefined) {
+      history.push(d.range_cm);
+      if (history.length > HISTORY) history.shift();
+      drawSpark();
+    }
 
     if (d.camera_enabled !== cameraOn) applyCamera(d.camera_enabled);
     if (d.detect_enabled !== detectOn) applyDetect(d.detect_enabled);
@@ -536,15 +737,15 @@ async function telemetry() {
 
     if (d.drivetrain) {
       dof = d.drivetrain.dof;
-      $('dof').textContent = '— ' + d.drivetrain.label;
+      $('dof').textContent = d.drivetrain.label;
       $('strafepad').style.display = dof >= 3 ? 'grid' : 'none';
     }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length
       ? '<span class="warn">unavailable: ' + missing.join(', ') + '</span>'
-      : 'all hardware online' + (d.detector ? ' · detector: ' + d.detector.backend : '');
-  } catch (e) { link.className = 'dot dead'; }
+      : 'all hardware online' + (d.detector ? '  ·  detector: ' + d.detector.backend : '');
+  } catch (e) { pulse.className = 'dead'; }
 }
 
 loadBehaviors();
