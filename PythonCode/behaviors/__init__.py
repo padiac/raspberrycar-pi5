@@ -15,17 +15,18 @@ from .base import Behavior
 from .follow import FollowBehavior
 from .lane import LaneBehavior
 from .patrol import PatrolBehavior
+from .replay import ReplayBehavior
 from .simple import IdleBehavior, ManualBehavior
 from .tree import Status, TreeBehavior, build_missions
 
 __all__ = [
     "Behavior", "FollowBehavior", "IdleBehavior", "LaneBehavior",
-    "ManualBehavior", "PatrolBehavior", "Status", "TreeBehavior",
-    "build_behaviors", "build_missions",
+    "ManualBehavior", "PatrolBehavior", "ReplayBehavior", "Status",
+    "TreeBehavior", "build_behaviors", "build_missions",
 ]
 
 
-def build_behaviors():
+def build_behaviors(recorder=None):
     """One instance of each behaviour, keyed by name. Order sets the UI order."""
     entries = [
         IdleBehavior(),
@@ -35,4 +36,6 @@ def build_behaviors():
         LaneBehavior(),
         *build_missions(),
     ]
+    if recorder is not None:
+        entries.append(ReplayBehavior(recorder))
     return {b.name: b for b in entries}

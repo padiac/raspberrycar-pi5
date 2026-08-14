@@ -476,6 +476,12 @@
     <label>chassis</label>
     <span id="dtpick"></span>
   </div>
+  <div class="row" style="margin-top:14px">
+    <button class="toggle" id="recbtn">● Record</button>
+    <button class="toggle" id="runbtn">▶ Replay</button>
+    <button class="toggle" id="clearbtn">Clear</button>
+    <span class="val" id="pathinfo" style="color:var(--muted);font-weight:500">no path</span>
+  </div>
   <p class="hint" id="holohint"></p>
   <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · hold two keys for a diagonal · <kbd>space</kbd> stops.</p>
 </div>
@@ -676,6 +682,30 @@ document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]
   btn.addEventListener('pointerdown', press);
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, release));
 });
+
+// ---- record and replay a driven path ------------------------------------
+let recording = false;
+
+const pathAction = async action => {
+  const r = await post('/api/path', {action});
+  if (r && r.error) flash(r.error);
+  else if (action === 'run') flash('replaying');
+};
+$('recbtn').onclick = () => pathAction(recording ? 'stop' : 'record');
+$('runbtn').onclick = () => pathAction('run');
+$('clearbtn').onclick = () => pathAction('clear');
+
+function renderPath(p) {
+  if (!p) return;
+  recording = p.recording;
+  $('recbtn').textContent = recording ? '■ Stop recording' : '● Record';
+  $('recbtn').classList.toggle('on', recording);
+  $('pathinfo').textContent = p.segments
+    ? p.segments + (p.segments === 1 ? ' move' : ' moves') + ' · ' + p.seconds + 's'
+    : (recording ? 'recording…' : 'no path');
+  $('runbtn').disabled = !p.segments;
+  $('runbtn').style.opacity = p.segments ? '1' : '.45';
+}
 
 // ---- chassis picker -----------------------------------------------------
 function renderDrivetrain(dt) {
@@ -977,6 +1007,7 @@ async function telemetry() {
     if (sf.enabled !== undefined && sf.enabled !== safetyOn) applySafety(sf.enabled);
 
     if (d.drivetrain) { renderDrivetrain(d.drivetrain); drawWheels(d.drivetrain); }
+    renderPath(d.path);
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length

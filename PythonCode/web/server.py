@@ -137,6 +137,34 @@ def api_behavior_config():
 # -- safety ----------------------------------------------------------------
 
 
+@app.route("/api/path", methods=["POST"])
+def api_path():
+    """Record / stop / clear the driven path, or play it back."""
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+
+    if action == "record":
+        robot.recorder.arm()
+    elif action == "stop":
+        robot.recorder.disarm()
+    elif action == "clear":
+        robot.recorder.disarm()
+        robot.recorder.clear()
+    elif action == "run":
+        robot.recorder.disarm()
+        if not robot.recorder.segments:
+            return jsonify(error="nothing recorded"), 409
+        ok, message = robot.select("replay")
+        if not ok:
+            return jsonify(error=message), 409
+        if "loop" in data:
+            robot.behaviors["replay"].configure(loop=data["loop"])
+    elif action is not None:
+        return jsonify(error=f"unknown action '{action}'"), 400
+
+    return jsonify(path=robot.recorder.status(), behavior=robot.behavior.name)
+
+
 @app.route("/api/drivetrain", methods=["POST"])
 def api_drivetrain():
     data = request.get_json(silent=True) or {}

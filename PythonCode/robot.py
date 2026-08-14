@@ -19,7 +19,7 @@ import threading
 import time
 
 from behaviors import build_behaviors
-from control import SafetyLayer
+from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
@@ -56,8 +56,9 @@ class Robot:
             VisionPipeline(self.camera, self.detector) if self.camera else None
         )
         self.safety = SafetyLayer()
+        self.recorder = PathRecorder()
 
-        self.behaviors = build_behaviors()
+        self.behaviors = build_behaviors(self.recorder)
         self.behavior = self.behaviors["idle"]
         self._attach_overlay()
 
@@ -253,6 +254,12 @@ class Robot:
                     self.requested = self.behavior.update(self, world)
                     self._drive(self.safety.filter(self.requested, world))
                     self.behavior_error = None
+                    # Record what reached the wheels rather than what was asked
+                    # for, so a replay reproduces the drive that happened and
+                    # not one the safety layer refused. Replaying is excluded,
+                    # or a playback would record itself.
+                    if self.behavior.name != "replay":
+                        self.recorder.observe(self.allowed, dt)
             except Exception as exc:  # noqa: BLE001 - a bad behaviour must not run away
                 with self.lock:
                     self.behavior_error = f"{type(exc).__name__}: {exc}"
@@ -275,6 +282,7 @@ class Robot:
             "requested": self.requested.as_dict(),
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
+            "path": self.recorder.status(),
             "drivetrain": (
                 {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),
                  "kind": getattr(self.drivetrain, "kind", None)}
