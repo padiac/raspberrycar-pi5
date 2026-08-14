@@ -1,0 +1,12 @@
+# Create the venv with system-site-packages so it can see the apt-installed
+# picamera2 / lgpio / gpiozero (these aren't reliably pip-installable on Pi):
+#   python3 -m venv venv --system-site-packages
+#   source venv/bin/activate
+#
+# torch/torchvision need the CPU wheel index:
+#   pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu

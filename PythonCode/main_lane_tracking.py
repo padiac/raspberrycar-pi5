@@ -1,4 +1,3 @@
-import RPi.GPIO as GPIO
 import time
 import cv2
 import numpy as np
@@ -6,17 +5,11 @@ import time
 from enum import Enum
 import copy
 
-from picamera.array import PiRGBArray
-from picamera import PiCamera
-
 from move import CarMove
 from ultrasound import CarUltrasound
 from infrared import CarInfrared
 from camera import CarCamera
 from track import CarDetect
-
-GPIO.setwarnings(False)  # Disable warning
-GPIO.setmode(GPIO.BCM)  # BCM coding
 
 
 # # 远程调试用代码,如果不使用pycharm进行调试，请注释该段代码
@@ -56,7 +49,6 @@ class Car(CarMove, CarUltrasound, CarInfrared, CarCamera, CarDetect):  # create 
         self.state = CarState.stop
         CarMove.MotorStop(self)
         CarCamera.CameraCleanup(self)
-        GPIO.cleanup()
 
 
 if __name__ == '__main__':
@@ -74,9 +66,8 @@ if __name__ == '__main__':
         ForB = 'Forward'
         LorR = 'Brake'
 
-        camera, rawCapture = car.CameraInit()  # Initialize the PiCamera
-        for raw_frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-            frame_origin = raw_frame.array
+        car.CameraInit()  # Initialize the camera
+        for frame_origin in car.capture_continuous():
 
             ################## lane detection ##############################################
             img = cv2.blur(frame_origin, (5, 5))  # denoising
@@ -156,30 +147,27 @@ if __name__ == '__main__':
                 LorR = 'Brake'
             
             ############################ motion control #####################################
-            if ForB is 'Brake':
-                if LorR is 'Left':
+            if ForB == 'Brake':
+                if LorR == 'Left':
                     car.left(turn_left_speed)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.right(turn_right_speed)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.brake()
-            elif ForB is 'Forward':
-                if LorR is 'Left':
+            elif ForB == 'Forward':
+                if LorR == 'Left':
                     car.forward_turn(speed_low, speed_high)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.forward_turn(speed_high, speed_low)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.forward(forward_speed)
-            elif ForB is 'Backward':
-                if LorR is 'Left':
+            elif ForB == 'Backward':
+                if LorR == 'Left':
                     car.left(turn_left_speed)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.right(turn_right_speed)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.back(40)
-
-
-            rawCapture.truncate(0)  # PiCamera必备
 
     except KeyboardInterrupt:
         print("Measurement stopped by User")

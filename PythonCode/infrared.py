@@ -1,36 +1,29 @@
 # Infrared obstacle avoidance module
 
-import RPi.GPIO as GPIO
 import time
 
-GPIO.setwarnings(False)
-GPIO.setmode(GPIO.BCM)
+import gpio_setup  # noqa: F401 - selects the correct gpiochip for this kernel
+from gpiozero import DigitalInputDevice
 
-  
 
 class CarInfrared(object):
     def __init__(self):
-        self.GPIO_Infrared_right = 8  # GPIO setting (BCM coding)
-        self.GPIO_Infrared_left = 7
+        # GPIO setting (BCM coding)
+        self.infrared_right = DigitalInputDevice(8, pull_up=False)
+        self.infrared_left = DigitalInputDevice(7, pull_up=False)
 
-        self.GPIO_left_tracking = 16
-        self.GPIO_right_tracking = 12
-
-        GPIO.setup(self.GPIO_Infrared_right, GPIO.IN)
-        GPIO.setup(self.GPIO_Infrared_left, GPIO.IN)
-
-        GPIO.setup(self.GPIO_left_tracking, GPIO.IN)
-        GPIO.setup(self.GPIO_right_tracking, GPIO.IN)
+        self.left_tracking = DigitalInputDevice(16, pull_up=False)
+        self.right_tracking = DigitalInputDevice(12, pull_up=False)
 
     def InfraredMeasure(self):
-        left_measure = GPIO.input(self.GPIO_Infrared_left)  # if there is an obstacle, GPIO will become 0; else, GPIO_input = 1;
-        right_measure = GPIO.input(self.GPIO_Infrared_right)
+        left_measure = self.infrared_left.value  # if there is an obstacle, this will become 0; else, 1;
+        right_measure = self.infrared_right.value
 
         return [left_measure, right_measure]
 
     def TrackingMreasure(self):
-        left_tracking = GPIO.input(self.GPIO_left_tracking)
-        right_tracking = GPIO.input(self.GPIO_right_tracking)#1黑0白
+        left_tracking = self.left_tracking.value
+        right_tracking = self.right_tracking.value  # 1黑0白
 
         return [left_tracking, right_tracking]
 
@@ -48,4 +41,3 @@ if __name__ == '__main__':
         # Reset by pressing CTRL + C
     except KeyboardInterrupt:
         print("Measurement stopped by User")
-        GPIO.cleanup()

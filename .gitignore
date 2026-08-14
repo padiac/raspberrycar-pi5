@@ -1,2 +1,8 @@
 */.idea
 /PythonCode/.idea
+/venv/
+__pycache__/
+*.pyc
+
+# Model weights are downloaded, not committed -- see fetch_models.sh
+/models/

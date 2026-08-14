@@ -1,15 +1,8 @@
-import RPi.GPIO as GPIO
 import time
 import cv2
-import numpy as np
-import os
 
-from picamera.array import PiRGBArray
-from picamera import PiCamera
-
-import tensorflow as tf
-from object_detection.utils import label_map_util
-from object_detection.utils import visualization_utils as vis_utils
+import torch
+from torchvision.models.detection import ssdlite320_mobilenet_v3_large, SSDLite320_MobileNet_V3_Large_Weights
 
 from move import CarMove
 from ultrasound import CarUltrasound
@@ -18,8 +11,8 @@ from camera import CarCamera
 from detect import CarDetect
 
 
-GPIO.setwarnings(False)  # Disable warning
-GPIO.setmode(GPIO.BCM)  # BCM coding
+SCORE_THRESHOLD = 0.5
+
 
 class Car(CarMove, CarUltrasound, CarInfrared, CarCamera, CarDetect):  # create class Car, which derives all the modules
     def __init__(self):
@@ -28,88 +21,68 @@ class Car(CarMove, CarUltrasound, CarInfrared, CarCamera, CarDetect):  # create 
         CarInfrared.__init__(self)
         CarCamera.__init__(self)
         CarDetect.__init__(self)
-    
+
     def AllStop(self):
         CarMove.MotorStop(self)
         CarCamera.CameraCleanup(self)
-        GPIO.cleanup()
+
+
+def draw_detections(frame, boxes, labels, scores, categories):  # 在frame上画框（检测结果）
+    for box, label, score in zip(boxes, labels, scores):
+        if score < SCORE_THRESHOLD:
+            continue
+        x1, y1, x2, y2 = box.astype(int)
+        class_name = categories[label] if label < len(categories) else str(label)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame, f'{class_name}: {score:.2f}', (x1, max(y1 - 10, 0)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    return frame
 
 
 if __name__ == '__main__':
     try:
-        car = Car() 
+        car = Car()
 
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         video_out = cv2.VideoWriter('out.mp4', fourcc, 0.8, (640, 480))
 
-        ##### Prepare for the tensorflow object detection API  #####
-        MODEL_NAME = 'ssdlite_mobilenet_v2_coco_2018_05_09'  # 使用的模型
-        PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'   
-        PATH_TO_LABELS = os.path.join('data', 'mscoco_label_map.pbtxt') 
-        NUM_CLASSES = 90 
-        fileAlreadyExists = os.path.isfile(PATH_TO_CKPT) 
+        ##### Prepare for the torchvision object detection model #####
+        # replaces the TensorFlow Object Detection API + frozen graph +
+        # label map that this script used to load.
+        print('Loading...')
+        weights = SSDLite320_MobileNet_V3_Large_Weights.COCO_V1
+        model = ssdlite320_mobilenet_v3_large(weights=weights)
+        model.eval()
+        categories = weights.meta['categories']
+        preprocess = weights.transforms()
+        print('Finish Load Model')
+        ##### Finish the Preparation for the object detection model #####
 
-        if not fileAlreadyExists:
-            print('Model does not exsist !')
-            exit
+        car.CameraInit()  # Initialize the camera
 
-        print('Loading...')   # Loading the model
-        detection_graph = tf.Graph() 
-        with detection_graph.as_default(): 
-            od_graph_def = tf.GraphDef() 
-            with tf.gfile.GFile(PATH_TO_CKPT, 'rb') as fid: 
-                serialized_graph = fid.read() 
-                od_graph_def.ParseFromString(serialized_graph) 
-                tf.import_graph_def(od_graph_def, name='')
-        label_map = label_map_util.load_labelmap(PATH_TO_LABELS) 
-        categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True) 
-        category_index = label_map_util.create_category_index(categories)
-        print('Finish Load Graph')
+        with torch.no_grad():
+            for frame in car.capture_continuous():
+                t_start = time.time()  # 用来计算FPS
 
-        image_tensor = detection_graph.get_tensor_by_name('image_tensor:0') 
-        detection_boxes = detection_graph.get_tensor_by_name('detection_boxes:0') 
-        detection_scores = detection_graph.get_tensor_by_name('detection_scores:0') 
-        detection_classes = detection_graph.get_tensor_by_name('detection_classes:0') 
-        num_detections = detection_graph.get_tensor_by_name('num_detections:0')
-        ##### Finish the Preparation for the tensorflow object detection API  #####
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image_tensor = torch.from_numpy(rgb_frame).permute(2, 0, 1)  # HWC -> CHW
+                input_tensor = preprocess(image_tensor)
 
+                print('Running detection..')
+                output = model([input_tensor])[0]  # 使用torchvision模型来Detect
 
-        ##### Use the Detection Graph #####
-        with detection_graph.as_default():
-            with tf.Session(graph=detection_graph) as sess:
-                camera, rawCapture = car.CameraInit()  # Initialize the PiCamera
-                # PiCamera 视频流：
-                for raw_frame in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
-                    t_start = time.time()  # 用来计算FPS
+                boxes = output['boxes'].numpy()
+                labels = output['labels'].numpy()
+                scores = output['scores'].numpy()
 
-                    frame = np.copy(raw_frame.array)
-                    frame.setflags(write=1)
-                    image_np_expanded = np.expand_dims(frame, axis=0) 
-                    
-                    print('Running detection..') 
-                    (boxes, scores, classes, num) = sess.run( 
-                        [detection_boxes, detection_scores, detection_classes, num_detections], 
-                        feed_dict={image_tensor: image_np_expanded})   # 使用API来Detect
-                    
-                    print('Done.  Visualizing..') 
-                    vis_utils.visualize_boxes_and_labels_on_image_array(
-                            frame,
-                            np.squeeze(boxes),
-                            np.squeeze(classes).astype(np.int32),
-                            np.squeeze(scores),
-                            category_index,
-                            use_normalized_coordinates=True,
-                            line_thickness=8)   # 在frame上画框（检测结果）
+                print('Done.  Visualizing..')
+                frame = draw_detections(frame, boxes, labels, scores, categories)
 
-                    car.VideoTransmission(frame)  # 向PC传输视频帧
-                    video_out.write(frame)
+                car.VideoTransmission(frame)  # 向PC传输视频帧
+                video_out.write(frame)
 
-
-                    rawCapture.truncate(0)  # PiCamera必备
-
-                    mfps = 1 / (time.time() - t_start)  # 计算FPS
-                    print('FPS: ', mfps)
-            
+                mfps = 1 / (time.time() - t_start)  # 计算FPS
+                print('FPS: ', mfps)
 
     except KeyboardInterrupt:
         print("Measurement stopped by User")

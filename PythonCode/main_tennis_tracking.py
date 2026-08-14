@@ -1,20 +1,13 @@
-import RPi.GPIO as GPIO
 import time
 import cv2
 import numpy as np
 import time
-
-from picamera.array import PiRGBArray
-from picamera import PiCamera
 
 from move import CarMove
 from ultrasound import CarUltrasound
 from infrared import CarInfrared
 from camera import CarCamera
 from detect_new import CarDetect
-
-GPIO.setwarnings(False)  # Disable warning
-GPIO.setmode(GPIO.BCM)  # BCM coding 
 
 
 class Car(CarMove, CarUltrasound, CarInfrared, CarCamera, CarDetect):  # create class Car, which derives all the modules
@@ -24,11 +17,10 @@ class Car(CarMove, CarUltrasound, CarInfrared, CarCamera, CarDetect):  # create 
         CarInfrared.__init__(self)
         CarCamera.__init__(self)
         CarDetect.__init__(self)
-    
+
     def AllStop(self):
         CarMove.MotorStop(self)
         CarCamera.CameraCleanup(self)
-        GPIO.cleanup()
 
 
 if __name__ == '__main__':
@@ -43,17 +35,14 @@ if __name__ == '__main__':
         x_mov_ave = 320
         turn_speed = 60
 
-        camera, rawCapture = car.CameraInit()  # Initialize the PiCamera
+        car.CameraInit()  # Initialize the camera
 
-        for raw_frame in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
+        for frame_origin in car.capture_continuous():
             t_start = time.time()  # 用来计算FPS
 
-            frame_origin = raw_frame.array
-            
             if VideoReturn:  # detect the tennis & transmit the frames to PC
                 frame_detect, x_pos, y_pos, radius = car.TennisDetect(frame_origin, VideoReturn)
                 car.VideoTransmission(frame_detect)
-                video_out.write(frame_detect)
             else:
                 x_pos, y_pos, radius = car.TennisDetect(frame_origin, VideoReturn)
                 # car.VideoTransmission(frame_origin)
@@ -86,31 +75,28 @@ if __name__ == '__main__':
             else: 
                 LorR = 'Brake'
 
-            if ForB is 'Brake':
-                if LorR is 'Left':
+            if ForB == 'Brake':
+                if LorR == 'Left':
                     car.left(turn_speed)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.right(turn_speed)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.brake()
-            elif ForB is 'Forward':
-                if LorR is 'Left':
+            elif ForB == 'Forward':
+                if LorR == 'Left':
                     car.left(turn_speed)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.right(turn_speed)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.forward(50)
-            elif ForB is 'Backward':
-                if LorR is 'Left':
+            elif ForB == 'Backward':
+                if LorR == 'Left':
                     car.left(turn_speed)
-                elif LorR is 'Right':
+                elif LorR == 'Right':
                     car.right(turn_speed)
-                elif LorR is 'Brake':
+                elif LorR == 'Brake':
                     car.back(40)
 
-
-            rawCapture.truncate(0)  # PiCamera必备
-            
             mfps = 1 / (time.time() - t_start)  # 计算FPS
             print('FPS: ', mfps)
             

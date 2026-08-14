@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>RaspberryCar</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1e2228; --line: #2e343d;
+    --text: #e8ecf1; --muted: #8b95a3; --accent: #4da3ff;
+    --ok: #3ecf8e; --warn: #ffb02e; --bad: #ff5c5c; --off: #5a636e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 760px; margin-inline: auto;
+  }
+  h1 { font-size: 17px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  h1 .mode { margin-left: auto; font-size: 13px; font-weight: 500; color: var(--accent); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+  .dot.live { background: var(--ok); }
+  .dot.dead { background: var(--bad); }
+
+  #view { width: 100%; border-radius: 10px; background: #000; display: block; aspect-ratio: 16/9; object-fit: contain; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 12px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+  button.mode {
+    padding: 12px 10px; border-radius: 9px; cursor: pointer; text-align: left;
+    background: #262c34; color: var(--text); border: 1px solid var(--line);
+    font-size: 14px; font-weight: 600; line-height: 1.25;
+  }
+  button.mode small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  button.mode.active { background: var(--accent); border-color: var(--accent); color: #08121f; }
+  button.mode.active small { color: #0d2743; }
+  button.mode:disabled { opacity: .45; cursor: not-allowed; }
+  #modestatus { margin-top: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #modestatus.err { color: var(--bad); }
+
+  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
+  .tel div { background: #171b21; border-radius: 8px; padding: 8px 10px; }
+  .tel span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .tel b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row + .row { margin-top: 10px; }
+  .row label { font-size: 13px; color: var(--muted); }
+  button.toggle {
+    padding: 9px 16px; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;
+    background: #262c34; color: var(--text); border: 1px solid var(--line);
+  }
+  button.toggle.on { background: var(--ok); border-color: var(--ok); color: #05231a; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  input[type=text] {
+    flex: 1; min-width: 130px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+    background: #171b21; border: 1px solid var(--line); color: var(--text);
+  }
+  #objects { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 24px; }
+  #objects span { background: #22303f; border: 1px solid #2f4459; color: #bcd8f5; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  #objects .none { background: none; border: none; color: var(--muted); padding-left: 0; }
+
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  button.k {
+    padding: 20px 0; font-size: 20px; font-weight: 600; color: var(--text);
+    background: #262c34; border: 1px solid var(--line); border-radius: 10px;
+    touch-action: manipulation; user-select: none; cursor: pointer;
+  }
+  button.k:active, button.k.on { background: var(--accent); border-color: var(--accent); color: #08121f; }
+  button.k.stop { background: #3a2226; border-color: #5c3339; }
+  button.k.stop:active { background: var(--bad); border-color: var(--bad); color: #1a0000; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .warn { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1><span class="dot" id="link"></span> RaspberryCar <span class="mode" id="modename">—</span></h1>
+
+<img id="view" src="/stream.mjpg" alt="camera stream">
+
+<div class="panel">
+  <h2>Driving mode</h2>
+  <div class="modes" id="modes"></div>
+  <div id="modestatus"></div>
+  <div class="row" id="followrow" style="display:none">
+    <label>follow</label>
+    <input type="text" id="target" placeholder="person">
+    <button class="toggle" id="settarget">Set target</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Telemetry</h2>
+  <div class="tel">
+    <div><span>Distance</span><b id="dist">--</b></div>
+    <div><span>Throttle</span><b id="thr">0.00</b></div>
+    <div><span>Steer</span><b id="str">0.00</b></div>
+    <div><span>L / R</span><b id="lr">-- / --</b></div>
+    <div><span>Obstacle L/R</span><b id="obs">--</b></div>
+    <div><span>Track L/R</span><b id="trk">--</b></div>
+    <div><span>Stream fps</span><b id="sfps">--</b></div>
+    <div><span>Detect fps</span><b id="dfps">--</b></div>
+    <div><span>Gamepad</span><b id="gp">none</b></div>
+  </div>
+  <p class="hint" id="hw"></p>
+</div>
+
+<div class="panel">
+  <h2>Vision</h2>
+  <div class="row">
+    <button class="toggle on" id="cambtn">Camera: on</button>
+    <button class="toggle" id="detbtn">Detection: off</button>
+  </div>
+  <div class="row">
+    <label>conf <b id="confval">0.40</b></label>
+    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
+  </div>
+  <div class="row">
+    <input type="text" id="filter" placeholder="show only these classes, comma separated — blank = all 80">
+    <button class="toggle" id="applyfilter">Apply</button>
+  </div>
+  <div id="objects"><span class="none">detection off</span></div>
+</div>
+
+<div class="panel">
+  <h2>Manual control</h2>
+  <div class="row"><label>Speed</label><input type="range" id="speed" min="20" max="100" value="60"><b id="speedval">60%</b></div>
+  <div class="pad" style="margin-top:10px">
+    <span></span>
+    <button class="k" data-t="1"  data-s="0">▲</button>
+    <span></span>
+    <button class="k" data-t="0"  data-s="-1">◀</button>
+    <button class="k stop" id="stop">STOP</button>
+    <button class="k" data-t="0"  data-s="1">▶</button>
+    <span></span>
+    <button class="k" data-t="-1" data-s="0">▼</button>
+    <span></span>
+  </div>
+  <p class="hint">Driving anything here switches to Manual automatically. <b>W A S D</b> or arrows &middot; hold to drive, release to stop &middot; space or STOP halts and returns to Stopped.</p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const link = $('link'), speed = $('speed');
+
+let throttle = 0, steer = 0, lastNonZero = false;
+let activeMode = null, padActive = false, cameraOn = true, detectOn = false;
+
+speed.oninput = () => $('speedval').textContent = speed.value + '%';
+const scale = () => speed.value / 100;
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {})
+    });
+    link.className = 'dot live';
+    return await r.json();
+  } catch (e) { link.className = 'dot dead'; return null; }
+}
+
+// ---- command loop -------------------------------------------------------
+// Re-sends the current command ~10x/sec. The server cuts the motors if it
+// stops hearing from us, so a dropped connection means the car halts rather
+// than running off at its last speed.
+setInterval(() => {
+  const active = throttle !== 0 || steer !== 0;
+  if (active) {
+    post('/api/drive', {throttle: throttle * scale(), steer: steer * scale()});
+    lastNonZero = true;
+  } else if (lastNonZero) {
+    post('/api/drive', {throttle: 0, steer: 0});
+    lastNonZero = false;
+  }
+}, 100);
+
+const setDrive = (t, s) => { throttle = t; steer = s; };
+const halt = () => { setDrive(0, 0); post('/api/stop'); lastNonZero = false; };
+
+// ---- modes --------------------------------------------------------------
+async function loadModes() {
+  try {
+    const r = await fetch('/api/modes');
+    const d = await r.json();
+    const box = $('modes');
+    box.innerHTML = '';
+    d.modes.forEach(m => {
+      const b = document.createElement('button');
+      b.className = 'mode' + (m.active ? ' active' : '');
+      b.innerHTML = m.label + '<small>' + (m.missing.length
+        ? 'needs ' + m.missing.join(', ') : m.description) + '</small>';
+      b.disabled = m.missing.length > 0;
+      b.onclick = async () => {
+        const res = await post('/api/mode', {name: m.name});
+        if (res && res.error) showStatus(res.error, true);
+        loadModes();
+      };
+      box.appendChild(b);
+    });
+  } catch (e) { link.className = 'dot dead'; }
+}
+
+function showStatus(text, isError) {
+  $('modestatus').textContent = text;
+  $('modestatus').className = isError ? 'err' : '';
+}
+
+$('settarget').onclick = async () => {
+  const target = $('target').value.trim() || 'person';
+  await post('/api/mode/config', {name: 'follow', target});
+};
+$('target').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('settarget').click();
+  e.stopPropagation();
+});
+
+// ---- camera / detection -------------------------------------------------
+$('cambtn').onclick = async () => {
+  const r = await post('/api/camera', {enabled: !cameraOn});
+  if (r) applyCamera(r.enabled);
+};
+function applyCamera(on) {
+  cameraOn = on;
+  $('cambtn').textContent = 'Camera: ' + (on ? 'on' : 'off');
+  $('cambtn').classList.toggle('on', on);
+}
+
+$('detbtn').onclick = async () => {
+  const r = await post('/api/detect', {enabled: !detectOn});
+  if (r && !r.error) applyDetect(r.enabled);
+};
+function applyDetect(on) {
+  detectOn = on;
+  $('detbtn').textContent = 'Detection: ' + (on ? 'on' : 'off');
+  $('detbtn').classList.toggle('on', on);
+}
+
+$('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
+$('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
+$('applyfilter').onclick = () => post('/api/detect', {
+  classes: $('filter').value.split(',').map(s => s.trim()).filter(Boolean)
+});
+$('filter').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('applyfilter').click();
+  e.stopPropagation();
+});
+
+// ---- touch / mouse ------------------------------------------------------
+document.querySelectorAll('button.k[data-t]').forEach(btn => {
+  const press = e => { e.preventDefault(); setDrive(+btn.dataset.t, +btn.dataset.s); btn.classList.add('on'); };
+  const release = e => { e.preventDefault(); setDrive(0, 0); btn.classList.remove('on'); };
+  btn.addEventListener('pointerdown', press);
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, release));
+});
+$('stop').addEventListener('pointerdown', e => { e.preventDefault(); halt(); });
+
+// ---- keyboard -----------------------------------------------------------
+const keys = new Set();
+const KEYMAP = {
+  KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right'
+};
+function fromKeys() {
+  if (padActive) return;
+  setDrive((keys.has('up') ? 1 : 0) + (keys.has('down') ? -1 : 0),
+           (keys.has('right') ? 1 : 0) + (keys.has('left') ? -1 : 0));
+}
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); halt(); return; }
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); keys.add(k); fromKeys(); }
+});
+addEventListener('keyup', e => {
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); keys.delete(k); fromKeys(); }
+});
+addEventListener('blur', halt);
+
+// ---- gamepad ------------------------------------------------------------
+const DEAD = 0.12;
+const dz = v => Math.abs(v) < DEAD ? 0 : v;
+function pollPad() {
+  const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(p => p);
+  if (pad) {
+    $('gp').textContent = 'connected';
+    const t = dz(-pad.axes[1]);
+    const s = dz(pad.axes[2] !== undefined ? pad.axes[2] : pad.axes[0]);
+    if (t || s) { padActive = true; setDrive(t, s); }
+    else if (padActive) { padActive = false; setDrive(0, 0); }
+    if (pad.buttons[1] && pad.buttons[1].pressed) halt();
+  } else {
+    $('gp').textContent = 'none';
+    padActive = false;
+  }
+  requestAnimationFrame(pollPad);
+}
+requestAnimationFrame(pollPad);
+
+// ---- telemetry ----------------------------------------------------------
+async function telemetry() {
+  try {
+    const d = await (await fetch('/api/telemetry')).json();
+    link.className = 'dot live';
+
+    $('modename').textContent = d.mode_label;
+    if (d.mode !== activeMode) { activeMode = d.mode; loadModes(); }
+    $('followrow').style.display = d.mode === 'follow' ? 'flex' : 'none';
+
+    if (d.mode_error) showStatus(d.mode_error, true);
+    else {
+      const s = d.mode_status || {};
+      showStatus(Object.entries(s).map(([k, v]) => k + ': ' + v).join('  ·  '), false);
+    }
+
+    $('dist').textContent = d.distance_cm === null ? '--' : d.distance_cm + ' cm';
+    $('thr').textContent = d.throttle.toFixed(2);
+    $('str').textContent = d.steer.toFixed(2);
+    $('lr').textContent = d.left.toFixed(2) + ' / ' + d.right.toFixed(2);
+    $('obs').textContent = d.obstacle ? d.obstacle.join(' / ') : '--';
+    $('trk').textContent = d.tracking ? d.tracking.join(' / ') : '--';
+    $('sfps').textContent = d.camera_enabled ? (d.stream_fps || '--') : 'off';
+    $('dfps').textContent = d.detect_enabled ? (d.detect_fps || '...') : 'off';
+
+    if (d.camera_enabled !== cameraOn) applyCamera(d.camera_enabled);
+    if (d.detect_enabled !== detectOn) applyDetect(d.detect_enabled);
+
+    const box = $('objects');
+    if (!d.objects || !d.objects.length) {
+      box.innerHTML = '<span class="none">' + (!d.camera_enabled ? 'camera off'
+        : d.detect_enabled ? 'nothing detected' : 'detection off') + '</span>';
+    } else {
+      box.innerHTML = d.objects.map(o => '<span>' + o.label + ' ' + o.conf.toFixed(2) + '</span>').join('');
+    }
+
+    const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
+    $('hw').innerHTML = missing.length
+      ? '<span class="warn">unavailable: ' + missing.join(', ') + '</span>'
+      : 'all hardware online' + (d.backend ? ' &middot; detector: ' + d.backend : '');
+  } catch (e) { link.className = 'dot dead'; }
+}
+
+loadModes();
+telemetry();
+setInterval(telemetry, 500);
+</script>
+</body>
+</html>

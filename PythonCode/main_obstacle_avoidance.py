@@ -1,28 +1,17 @@
-import RPi.GPIO as GPIO
 import time
-
-from picamera.array import PiRGBArray
-from picamera import PiCamera
 
 from move import CarMove
 from ultrasound import CarUltrasound
 from infrared import CarInfrared
-from camera import CarCamera
 
-GPIO.setwarnings(False)  # Disable warning
-GPIO.setmode(GPIO.BCM)  # BCM coding 
-
-class Car(CarMove, CarUltrasound, CarInfrared, CarCamera):  # create class Car, which derives all the modules
+class Car(CarMove, CarUltrasound, CarInfrared):  # create class Car, which derives all the modules
     def __init__(self):
         CarMove.__init__(self)
         CarUltrasound.__init__(self)
         CarInfrared.__init__(self)
-        CarCamera.__init__(self)
-    
+
     def AllStop(self):
         CarMove.MotorStop(self)
-        CarCamera.CameraCleanup(self)
-        GPIO.cleanup()
 
 
 if __name__ == '__main__':

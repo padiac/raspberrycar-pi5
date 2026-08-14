@@ -1,12 +1,8 @@
-import RPi.GPIO as GPIO
 import time
 
 from move import CarMove
 from infrared import CarInfrared
 from enum import Enum
-
-GPIO.setwarnings(False)
-GPIO.setmode(GPIO.BCM)
 
 class Car(CarMove, CarInfrared):
     def __init__(self):
@@ -55,4 +51,4 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         print("Measurement stopped by User")
-        GPIO.cleanup()
+        car.brake()

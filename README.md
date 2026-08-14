@@ -4,6 +4,108 @@ An intelligent car based on Raspberry-Pi-3.
 
 （中文介绍请往后翻）
 
+---
+
+# Fork notes — Raspberry Pi 5 port + web control
+
+This fork runs the car on a **Raspberry Pi 5 / Debian 12 (Bookworm)** with an
+**IMX219** camera, and adds a single-process web-controlled runtime on top of
+the original's hardware drivers.
+
+## What's new: one runtime, switchable modes
+
+The original is six standalone programs (`main_*.py`), each grabbing the camera
+and GPIO for itself — so only one behaviour could run at a time and you
+couldn't watch it while it did. This fork adds a single process that owns the
+hardware, with the behaviour chosen at runtime:
+
+```
+web_server.py       HTTP only, no logic
+      │
+robot.py            owns all hardware, runs a 20 Hz control loop
+   ┌──┴──┐
+vision.py          modes/
+(capture,          base.py  ·  idle  manual  avoid  follow  lane
+ detect,
+ MJPEG)
+```
+
+Run it, then open `http://<pi-ip>:8000` from a PC or phone:
+
+```
+cd PythonCode
+python3 web_server.py
+```
+
+It gives you a live 1280x720 MJPEG stream, driving by touch / WASD / gamepad,
+YOLO26 object detection overlaid on the video, live sensor telemetry, and
+mode switching. Adding a behaviour means subclassing `DriveMode` and listing it
+in `modes/build_modes()` — the API and UI pick it up automatically.
+
+Modes: **Stopped**, **Manual**, **Obstacle avoidance**, **Follow object**
+(locks onto any of the 80 COCO classes — the generalised version of the
+original tennis tracking), **Lane following**.
+
+## Compatibility changes from the original
+
+* `picamera` (legacy) → **`picamera2`**. Bookworm dropped the old camera stack.
+* **`RPi.GPIO` doesn't work on the Pi 5 at all** — it hardcodes memory
+  addresses for the old SoC-integrated GPIO controller, which the Pi 5's
+  separate RP1 chip doesn't have (`Cannot determine SOC peripheral base
+  address`). `move.py` / `ultrasound.py` / `infrared.py` now use
+  [`gpiozero`](https://gpiozero.readthedocs.io/); no `RPi.GPIO` import is left
+  anywhere.
+* **Kernel 6.12 renumbered the gpiochip devices** (RP1 is `gpiochip15`, not
+  `gpiochip4`), and gpiozero's auto-detection guesses 0 or 4 and then silently
+  falls back to the broken RPi.GPIO backend. `gpio_setup.py` finds the chip by
+  its `pinctrl-rp1` label instead of hardcoding a number, so a future
+  renumbering won't break it again. Import it before creating any device.
+* `ultrasound.py` uses gpiozero's built-in `DistanceSensor` (HC-SR04 support
+  included) rather than hand-rolled trigger/echo timing.
+* TensorFlow Object Detection API → **YOLO26n via NCNN**. On this Pi 5,
+  measured at 320px: NCNN **58 fps**, the same model under PyTorch 14 fps, the
+  original's SSDLite 7 fps. Detection is throttled to 10 fps by default —
+  unthrottled it eats ~3.4 of the 4 cores and starves the driving loop.
+* Dependencies live in a venv created with `--system-site-packages`, so it
+  still sees the apt-installed `picamera2` / `lgpio` / `gpiozero`. Note
+  `numpy` must stay on 1.x: the apt `simplejpeg` that picamera2 depends on is
+  compiled against the 1.x ABI, and numpy 2 breaks it.
+
+## Setup
+
+```
+python3 -m venv venv --system-site-packages
+source venv/bin/activate
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+./fetch_models.sh          # model weights, ~52 MB, not committed
+```
+
+For a camera module with no EEPROM ident (most cheap IMX219 boards), automatic
+detection finds nothing — name the sensor explicitly in
+`/boot/firmware/config.txt`:
+
+```
+camera_auto_detect=0
+dtoverlay=imx219
+```
+
+## Hardware status
+
+Working and verified on real hardware: camera (streaming, detection), GPIO
+output, ultrasonic and infrared reads.
+
+Not yet wired: the motor driver board hasn't arrived, so the GPIO pin numbers
+in `move.py` are the original's placeholders. `move.py` also still models a
+**two-motor differential** drive; the actual chassis is **mecanum**, which
+needs four independent motors and a 3-DOF `(vx, vy, omega)` interface to use
+its sideways travel. Line-tracking sensors are one short of a usable set.
+
+## Known issues inherited from upstream
+
+`main_object_detection.py` and `main_PID_test.py` import `detect`, which only
+exists in `old_version_backup/` — they were already broken upstream. Their
+functionality is covered by the `follow` mode.
+
 ## Platform
 Raspberry-Pi-3
 
@@ -23,15 +125,13 @@ Car (4 motors)
 
 python 3
 
-RPi.GPIO
+gpiozero (Pi 5 compatible; talks to hardware via its `lgpio` backend)
 
 opencv
 
-picamera
+picamera2
 
-tensorflow
-
-TensorFlow Object Detection API
+pytorch + torchvision
 
 ### On PC:
 
@@ -40,6 +140,13 @@ python 3
 opencv
 
 ## Run
+
+On the Pi, activate the venv first:
+```
+cd ~/projects/RaspberryCar
+source venv/bin/activate
+```
+(if the venv doesn't exist yet: `python3 -m venv venv --system-site-packages && pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu`)
 
 ### Obstacle avoidance
 
@@ -99,15 +206,13 @@ python3 pc_receiver.py
 ```
 
 ### Object Detection
-Based on TensorFLow Object Detection API, using the 'ssdlite_mobilenet_v2_coco_2018_05_09' pre-trained model. 
+Based on `torchvision.models.detection`, using the pretrained `ssdlite320_mobilenet_v3_large` COCO model (weights download automatically the first time you run the script, no manual setup needed).
 
 Enter the following commands in Pi Terminal:
 ```
 cd PythonCode
 python3 main_object_detection.py
 ```
-
-(NOTICE: TensorFlow Object Detection API and the ssdlite model are not contained in the repo. See here to install them [EdjeElectronics/Tutorial to set up TensorFlow Object Detection API on the Raspberry Pi](https://github.com/EdjeElectronics/TensorFlow-Object-Detection-on-the-Raspberry-Pi#tutorial-to-set-up-tensorflow-object-detection-api-on-the-raspberry-pi))
 
 
 
@@ -404,8 +509,7 @@ python3 main_object_detection.py
 cd PythonCode
 python3 pc_receiver.py
 ```
-NOTICE：Tensorflow Object Detection API 和 ssdlite模型并未上传至此仓库，需要自行安装。二者的安装和配置方法请参考此文档：[EdjeElectronics/Tutorial to set up TensorFlow Object Detection API on the Raspberry Pi](https://github.com/EdjeElectronics/TensorFlow-Object-Detection-on-the-Raspberry-Pi#tutorial-to-set-up-tensorflow-object-detection-api-on-the-raspberry-pi)
-; 或者TensorFlow Object Detection API可以直接clone这位的 [xyc2690/Raspberry_ObjectDetection_Camera](https://github.com/xyc2690/Raspberry_ObjectDetection_Camera)，可以不用配置TensorFlow Object Detection API，下载即用。
+NOTICE：目标检测已改为使用 `torchvision.models.detection` 里预训练的 `ssdlite320_mobilenet_v3_large`（COCO 权重），第一次运行时会自动下载模型权重，不需要再手动安装 TensorFlow Object Detection API 或下载 ssdlite 模型文件。
 
 ### 网球追踪
 
