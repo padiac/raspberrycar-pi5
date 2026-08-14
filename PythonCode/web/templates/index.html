@@ -42,6 +42,16 @@
             background: #171b21; color: var(--muted); }
   #safety.active { background: #3a2f1c; color: var(--warn); }
 
+  /* Behaviour tree, drawn while it runs */
+  #tree { margin: 10px 0 0; padding: 10px; background: #171b21; border-radius: 8px;
+          font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+          color: var(--muted); overflow-x: auto; white-space: pre; }
+  #tree:empty { display: none; }
+  #tree .running { color: var(--accent); font-weight: 600; }
+  #tree .success { color: var(--ok); }
+  #tree .failure { color: var(--bad); }
+  #tree .detail  { color: #6b7480; }
+
   .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
   .tel div { background: #171b21; border-radius: 8px; padding: 8px 10px; }
   .tel span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -93,6 +103,7 @@
     <button class="toggle" id="settarget">Set</button>
   </div>
   <div id="safety">safety layer: idle</div>
+  <pre id="tree"></pre>
 </div>
 
 <div class="panel">
@@ -301,6 +312,26 @@ function pollPad() {
 }
 requestAnimationFrame(pollPad);
 
+// ---- behaviour tree drawing ---------------------------------------------
+// Turns the nested describe() into an indented tree, colouring whichever nodes
+// are currently running so the task is visible while it happens.
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function renderTree(node, prefix = '', isLast = true, isRoot = true) {
+  const mark = {running: '▶', success: '✓', failure: '✗'}[node.status] || '·';
+  const branch = isRoot ? '' : (isLast ? '└─ ' : '├─ ');
+  const detail = node.detail ? ' <span class="detail">' + esc(node.detail) + '</span>' : '';
+  let out = prefix + branch +
+    '<span class="' + (node.status || '') + '">' + mark + ' ' + esc(node.name) + '</span>' +
+    detail + '\n';
+  const kids = node.children || [];
+  const childPrefix = prefix + (isRoot ? '' : (isLast ? '   ' : '│  '));
+  kids.forEach((kid, i) => {
+    out += renderTree(kid, childPrefix, i === kids.length - 1, false);
+  });
+  return out;
+}
+
 // ---- telemetry ----------------------------------------------------------
 async function telemetry() {
   try {
@@ -312,12 +343,16 @@ async function telemetry() {
     $('targetrow').style.display =
       (d.behavior_status && 'target' in d.behavior_status) ? 'flex' : 'none';
 
+    const st = d.behavior_status || {};
     if (d.behavior_error) { $('bstatus').textContent = d.behavior_error; $('bstatus').className = 'err'; }
     else {
-      const s = d.behavior_status || {};
-      $('bstatus').textContent = Object.entries(s).map(([k, v]) => k + ': ' + v).join('  ·  ');
+      // 'tree' is rendered separately below; keep it out of the one-line summary.
+      $('bstatus').textContent = Object.entries(st)
+        .filter(([k]) => k !== 'tree')
+        .map(([k, v]) => k + ': ' + v).join('  ·  ');
       $('bstatus').className = '';
     }
+    $('tree').innerHTML = st.tree ? renderTree(st.tree) : '';
 
     // Safety layer: show when it is actively cutting the request back.
     const sf = d.safety || {};

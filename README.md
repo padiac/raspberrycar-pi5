@@ -48,7 +48,7 @@ control/      safety.py     the reflex layer
 
 behaviors/    simple.py     idle, manual
               patrol.py  follow.py  lane.py
-              composite.py  state machine over other behaviours
+              tree/         behaviour trees: composing behaviours into tasks
 
 web/          server.py     HTTP only, no logic
 ```
@@ -62,9 +62,9 @@ python3 main.py
 
 Behaviours: **Stopped**, **Manual**, **Patrol**, **Follow object** (locks onto
 any of the 80 COCO classes — the generalised version of the original tennis
-tracking), **Search and approach**, **Lane following**. Adding one means
-subclassing `Behavior` and listing it in `behaviors.build_behaviors()`; the API
-and the web UI pick it up from there.
+tracking), **Lane following**, plus the missions **Search and approach** and
+**Seek and follow**. Adding one means writing it and listing it in
+`behaviors.build_behaviors()`; the API and the web UI pick it up from there.
 
 ### Obstacle avoidance is a layer, not a mode
 
@@ -82,13 +82,51 @@ intent, and intent belongs to behaviours. `Patrol` is the illustration — it
 simply asks to drive forward, notices the safety layer keeps zeroing that, and
 picks a new direction itself.
 
-### Composing behaviours
+### Composing behaviours: the tree
 
-Real tasks are not one behaviour forever. `behaviors/composite.py` is a small
-state machine over other behaviours, and because a composite is itself a
-`Behavior`, the robot cannot tell the difference and composites can nest.
-**Search and approach** is the worked example: spin on the spot until the
-target appears, follow it in, stop when it fills enough of the frame.
+A behaviour decides how to move *right now*. A task is a shape over time --
+"look for it, then drive to it, then stop" -- and hand-writing a state machine
+per task gets unmaintainable fast. `behaviors/tree/` is a behaviour tree, the
+standard answer; ROS 2's Nav2 orchestrates navigation with one, so the concepts
+carry over.
+
+The whole idea is one rule: a node, when ticked, returns **SUCCESS**,
+**FAILURE** or **RUNNING**. Everything else — sequences, fallbacks, retries,
+timeouts — is a different rule for combining children's answers. `RunBehavior`
+turns any existing `Behavior` into a leaf, which is the join between the two
+layers: `FollowBehavior` has no idea it is part of a task, and the task has no
+idea how following works.
+
+Two missions ship as examples:
+
+**`fetch`** — a sequence, i.e. *and then*:
+
+```
+Sequence
+├─ Timeout(25s) → Scan until the target is seen
+├─ Approach until it fills the frame
+└─ Wait, arrived
+```
+
+The `Timeout` is what makes it a task rather than a demo: if the target never
+appears the mission fails and stops instead of spinning all day.
+
+**`seek`** — a fallback, i.e. *or else*, and the more interesting one:
+
+```
+Repeat(forever)
+└─ Fallback
+   ├─ Sequence: [sees target] → Follow it
+   └─ Patrol
+```
+
+`Fallback` retries from the top every tick, so the switch is automatic in both
+directions: walk into view and the car picks you up mid-patrol; walk away and
+it goes back to wandering. Neither `FollowBehavior` nor `PatrolBehavior` knows
+the other exists — the composition is entirely in the tree.
+
+The web page draws the live tree with the running path highlighted, so you can
+watch which branch is active while it drives.
 
 ### Mecanum
 
@@ -99,8 +137,20 @@ currently wired, and simply discards `vy`. Behaviours are written against the
 three-axis interface either way, so nothing above changes when the four-motor
 board arrives — set `CAR_DRIVETRAIN=mecanum` and adjust the pins in one place.
 
-`test_layers.py` checks the kinematics and the safety rules without needing any
-hardware attached, which is the practical payoff of the split.
+### Tests
+
+`test_layers.py` checks the kinematics and every safety rule, including a sweep
+asserting the safety layer never increases or reverses any axis.
+`test_tree.py` checks the tree semantics — status propagation, decorator
+behaviour, reset, and that `Fallback` really does re-decide each tick.
+
+Neither needs any hardware attached, which is the practical payoff of the
+split:
+
+```
+cd PythonCode
+python3 test_layers.py && python3 test_tree.py
+```
 
 ## Compatibility changes from the original
 
