@@ -21,6 +21,7 @@ import time
 from behaviors import build_behaviors
 from control import SafetyLayer
 from hal import Velocity, build_drivetrain
+from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
 from hal.sensors import FloorArray, ProximityArray, RangeFinder
 from perception.pipeline import VisionPipeline
@@ -138,6 +139,37 @@ class Robot:
         with self.lock:
             self._drive(Velocity.STOP)
 
+    def set_drivetrain(self, kind):
+        """Swap the chassis model at runtime. Returns (ok, message).
+
+        Useful before the four-motor board arrives: the mecanum kinematics can
+        be exercised, and the wheel speeds watched, with only two motors
+        actually wired. The pins have to be handed back before the new chassis
+        can claim them, so a failure leaves nothing driving -- hence the
+        attempt to put the old one back.
+        """
+        with self.lock:
+            if self.drivetrain is not None:
+                if kind == getattr(self.drivetrain, "kind", None):
+                    return True, f"already {kind}"
+                self._drive(Velocity.STOP)
+                self.drivetrain.close()
+                self.drivetrain = None
+
+            try:
+                self.drivetrain = build_drivetrain(kind)
+                self.drivetrain.kind = kind
+                return True, f"drivetrain: {self.drivetrain.label}"
+            except Exception as exc:  # noqa: BLE001
+                message = f"could not build '{kind}': {exc}"
+                print(f"[hw] {message}", flush=True)
+                try:
+                    self.drivetrain = build_drivetrain()   # back to the default
+                    self.drivetrain.kind = None
+                except Exception:  # noqa: BLE001 - now there is simply no chassis
+                    self.drivetrain = None
+                return False, message
+
     def set_target(self, label):
         """Point whatever is running at `label`, or start following it.
 
@@ -243,7 +275,11 @@ class Robot:
             "requested": self.requested.as_dict(),
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
-            "drivetrain": self.drivetrain.status() if self.drivetrain else None,
+            "drivetrain": (
+                {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),
+                 "kind": getattr(self.drivetrain, "kind", None)}
+                if self.drivetrain else None
+            ),
             "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
             "proximity": world.proximity.as_dict() if world.proximity else None,
             "floor": world.floor.as_dict() if world.floor else None,

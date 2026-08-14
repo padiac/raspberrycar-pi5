@@ -338,6 +338,31 @@
     box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--accent) 55%, transparent);
   }
   button.k.mini { padding: 14px 0; font-size: 12.5px; color: var(--muted); }
+  .pad.two { grid-template-columns: repeat(2, 1fr); }
+  button.k[data-holo] { font-size: 20px; }
+  /* Sideways and diagonal travel needs a holonomic chassis. Shown but clearly
+     inert on two motors, rather than hidden -- the point is that the chassis
+     is the limitation, not the interface. */
+  button.k.inert { opacity: .32; cursor: not-allowed; }
+  button.k.inert:active { transform: none; background: var(--surface);
+                          border-color: var(--line); color: var(--text); }
+
+  .drive { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
+  #wheels { width: 168px; height: 210px; }
+  @media (max-width: 560px) {
+    .drive { grid-template-columns: 1fr; justify-items: center; }
+    #wheels { width: 150px; height: 188px; }
+  }
+
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
+         overflow: hidden; background: var(--surface); }
+  .seg button {
+    padding: 7px 13px; font-size: 12px; font-weight: 600; color: var(--muted);
+    border-right: 1px solid var(--line); transition: all .15s;
+  }
+  .seg button:last-child { border-right: none; }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--accent); color: var(--on-accent); }
 
   /* ── telemetry ──────────────────────────────────────────────────── */
   .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; }
@@ -422,23 +447,37 @@
 
 <div class="panel">
   <h2>Manual control <em id="dof"></em></h2>
-  <div class="row">
+
+  <div class="drive">
+    <div class="pad" id="dirpad">
+      <button class="k" data-vx="1"  data-vy="-1" data-holo>↖</button>
+      <button class="k" data-vx="1">↑</button>
+      <button class="k" data-vx="1"  data-vy="1"  data-holo>↗</button>
+      <button class="k" data-vy="-1" data-holo>←</button>
+      <button class="k mini" data-vx="0" data-vy="0" data-om="0">stop</button>
+      <button class="k" data-vy="1"  data-holo>→</button>
+      <button class="k" data-vx="-1" data-vy="-1" data-holo>↙</button>
+      <button class="k" data-vx="-1">↓</button>
+      <button class="k" data-vx="-1" data-vy="1"  data-holo>↘</button>
+    </div>
+    <canvas id="wheels" width="240" height="300" title="live wheel speeds"></canvas>
+  </div>
+
+  <div class="pad two" style="margin-top:10px">
+    <button class="k" data-om="-1">↺ turn left</button>
+    <button class="k" data-om="1">turn right ↻</button>
+  </div>
+
+  <div class="row" style="margin-top:14px">
     <label>speed</label><span class="val" id="speedval">60%</span>
     <input type="range" id="speed" min="20" max="100" value="60">
   </div>
-  <div class="pad" style="margin-top:15px">
-    <span></span><button class="k" data-vx="1">▲</button><span></span>
-    <button class="k" data-om="-1">↺</button>
-    <button class="k mini" data-vx="0" data-om="0">coast</button>
-    <button class="k" data-om="1">↻</button>
-    <span></span><button class="k" data-vx="-1">▼</button><span></span>
+  <div class="row">
+    <label>chassis</label>
+    <span id="dtpick"></span>
   </div>
-  <div class="pad" id="strafepad" style="margin-top:10px; display:none">
-    <button class="k mini" data-vy="-1">◀ strafe</button>
-    <span></span>
-    <button class="k mini" data-vy="1">strafe ▶</button>
-  </div>
-  <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · <kbd>space</kbd> stops.</p>
+  <p class="hint" id="holohint"></p>
+  <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · hold two keys for a diagonal · <kbd>space</kbd> stops.</p>
 </div>
 
 <div class="panel">
@@ -629,6 +668,7 @@ $('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
 document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]').forEach(btn => {
   const press = e => {
     e.preventDefault();
+    if (btn.classList.contains('inert')) { flash('needs a mecanum chassis'); return; }
     setV(+(btn.dataset.vx || 0), +(btn.dataset.vy || 0), +(btn.dataset.om || 0));
     btn.classList.add('on');
   };
@@ -636,6 +676,102 @@ document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]
   btn.addEventListener('pointerdown', press);
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, release));
 });
+
+// ---- chassis picker -----------------------------------------------------
+function renderDrivetrain(dt) {
+  dof = dt.dof;
+  $('dof').textContent = dt.label;
+
+  // Sideways travel is a property of the chassis, so the buttons that need it
+  // are dimmed rather than removed on a two-motor drive.
+  const holonomic = dof >= 3;
+  document.querySelectorAll('button.k[data-holo]').forEach(b => b.classList.toggle('inert', !holonomic));
+  $('holohint').textContent = holonomic
+    ? 'Diagonals and sideways travel come free from the mecanum kinematics — vx and vy at once.'
+    : 'Sideways and diagonal buttons are inert: a two-motor chassis has no sideways axis. Switch to mecanum to try the maths before the board is wired.';
+
+  const pick = $('dtpick');
+  const want = (dt.kinds || []).join(',') + '|' + dt.kind;
+  if (pick.dataset.key === want) return;
+  pick.dataset.key = want;
+  pick.innerHTML = '';
+  const seg = document.createElement('span');
+  seg.className = 'seg';
+  (dt.kinds || []).forEach(kind => {
+    const b = document.createElement('button');
+    b.textContent = kind;
+    b.className = (dt.label.startsWith(kind.slice(0, 4)) ? 'on' : '');
+    b.onclick = async () => {
+      const r = await post('/api/drivetrain', {kind});
+      flash(r && r.error ? r.error : (r && r.message) || kind);
+      pick.dataset.key = '';
+    };
+    seg.appendChild(b);
+  });
+  pick.appendChild(seg);
+}
+
+// ---- live wheel diagram -------------------------------------------------
+// Mirrors the chassis: each wheel drawn where it sits, filled by how hard it is
+// driving and which way. Makes the mecanum solution legible -- press a diagonal
+// and you can see two wheels spin and two sit still.
+function drawWheels(dt) {
+  const c = $('wheels'), ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!dt) return;
+
+  const css = getComputedStyle(document.documentElement);
+  const line = css.getPropertyValue('--line-firm').trim();
+  const dim = css.getPropertyValue('--dim').trim();
+  const accent = css.getPropertyValue('--accent').trim();
+  const bad = css.getPropertyValue('--bad').trim();
+  const sunken = css.getPropertyValue('--sunken').trim();
+
+  const names = Object.keys(dt.wheels || {});
+  const four = names.length === 4;
+  // (column, row) for each wheel; a 2-motor chassis has one "wheel" per side.
+  const slots = four
+    ? [[0, 0], [1, 0], [0, 1], [1, 1]]
+    : [[0, 0], [1, 0]];
+
+  const bw = 54, bh = 74, gapx = 56, gapy = four ? 40 : 0;
+  const totalW = bw * 2 + gapx, totalH = bh * (four ? 2 : 1) + gapy;
+  const ox = (w - totalW) / 2, oy = (h - totalH) / 2;
+
+  // chassis body
+  ctx.fillStyle = sunken; ctx.strokeStyle = line; ctx.lineWidth = 1.5;
+  const bx = ox + bw - 6, by = oy - 6, bwid = gapx + 12, bhei = totalH + 12;
+  ctx.beginPath(); ctx.roundRect(bx, by, bwid, bhei, 8); ctx.fill(); ctx.stroke();
+
+  names.forEach((name, i) => {
+    const [col, row] = slots[i] || [0, 0];
+    const x = ox + col * (bw + gapx), y = oy + row * (bh + gapy);
+    const v = dt.wheels[name] || 0;
+
+    ctx.fillStyle = sunken; ctx.strokeStyle = line; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(x, y, bw, bh, 9); ctx.fill(); ctx.stroke();
+
+    // Fill grows from the middle: up for forward, down for reverse.
+    const mag = Math.min(1, Math.abs(v));
+    if (mag > 0.005) {
+      const mid = y + bh / 2, fill = (bh / 2 - 5) * mag;
+      ctx.fillStyle = v > 0 ? accent : bad;
+      ctx.beginPath();
+      ctx.roundRect(x + 5, v > 0 ? mid - fill : mid, bw - 10, fill, 5);
+      ctx.fill();
+    }
+    ctx.strokeStyle = dim; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + 6, y + bh / 2); ctx.lineTo(x + bw - 6, y + bh / 2); ctx.stroke();
+
+    ctx.fillStyle = dim; ctx.font = '600 9px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(name.replace('_', ' '), x + bw / 2, y + bh + 12);
+    ctx.fillStyle = Math.abs(v) > 0.005 ? (v > 0 ? accent : bad) : dim;
+    ctx.font = '650 11px ui-monospace, Menlo, monospace';
+    ctx.fillText(v.toFixed(2), x + bw / 2, y - 5);
+  });
+}
 
 const keys = new Set();
 const KEYMAP = {
@@ -840,11 +976,7 @@ async function telemetry() {
     if (d.detect_enabled !== detectOn) applyDetect(d.detect_enabled);
     if (sf.enabled !== undefined && sf.enabled !== safetyOn) applySafety(sf.enabled);
 
-    if (d.drivetrain) {
-      dof = d.drivetrain.dof;
-      $('dof').textContent = d.drivetrain.label;
-      $('strafepad').style.display = dof >= 3 ? 'grid' : 'none';
-    }
+    if (d.drivetrain) { renderDrivetrain(d.drivetrain); drawWheels(d.drivetrain); }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length

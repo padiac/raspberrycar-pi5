@@ -137,6 +137,20 @@ def api_behavior_config():
 # -- safety ----------------------------------------------------------------
 
 
+@app.route("/api/drivetrain", methods=["POST"])
+def api_drivetrain():
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind")
+    if not kind:
+        return jsonify(error="kind required"), 400
+
+    ok, message = robot.set_drivetrain(kind)
+    status = robot.drivetrain.status() if robot.drivetrain else None
+    if not ok:
+        return jsonify(error=message, drivetrain=status), 409
+    return jsonify(message=message, drivetrain=status)
+
+
 @app.route("/api/safety", methods=["POST"])
 def api_safety():
     data = request.get_json(silent=True) or {}

@@ -92,6 +92,9 @@ class Drivetrain(ABC):
     def __init__(self):
         self.last = Velocity.STOP
         self.speeds = ()
+        #: Every Motor this chassis owns, so the pins can be handed back when
+        #: swapping to a different chassis at runtime.
+        self.motors = ()
 
     @abstractmethod
     def wheel_speeds(self, velocity):
@@ -100,6 +103,19 @@ class Drivetrain(ABC):
     @abstractmethod
     def _drive(self, speeds):
         """Push already-computed speeds to the motors."""
+
+    def close(self):
+        """Release the GPIO pins. Required before building another chassis."""
+        try:
+            self.stop()
+        except Exception:  # noqa: BLE001 - closing must not depend on the motors working
+            pass
+        for motor in self.motors:
+            try:
+                motor.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.motors = ()
 
     def apply(self, velocity):
         velocity = velocity.clamped()
@@ -135,6 +151,7 @@ class DifferentialDrive(Drivetrain):
         super().__init__()
         self.left = Motor(forward=self.LEFT[0], backward=self.LEFT[1])
         self.right = Motor(forward=self.RIGHT[0], backward=self.RIGHT[1])
+        self.motors = (self.left, self.right)
 
     def wheel_speeds(self, v):
         # vy deliberately unused: this chassis has no sideways axis.
@@ -171,6 +188,7 @@ class MecanumDrive(Drivetrain):
         self.front_right = Motor(forward=self.FRONT_RIGHT[0], backward=self.FRONT_RIGHT[1])
         self.rear_left = Motor(forward=self.REAR_LEFT[0], backward=self.REAR_LEFT[1])
         self.rear_right = Motor(forward=self.REAR_RIGHT[0], backward=self.REAR_RIGHT[1])
+        self.motors = (self.front_left, self.front_right, self.rear_left, self.rear_right)
 
     def wheel_speeds(self, v):
         # Standard mecanum inverse kinematics. vy flips sign between the left
