@@ -140,6 +140,8 @@ class TreeBehavior:
     """
 
     wants_detection = False
+    #: A tree is always a mission: it has a goal and it finishes.
+    category = "mission"
 
     def __init__(self, name, label, root, description="", requires=(),
                  wants_detection=False, blackboard=None):
@@ -151,6 +153,14 @@ class TreeBehavior:
         self.root = root
         self.blackboard = dict(blackboard or {})
         self.result = None
+        # A mission takes a target if anything inside it does, so picking one
+        # on the video reaches the right leaf without the UI knowing the shape
+        # of the tree.
+        self.accepts_target = any(
+            getattr(getattr(node, "behavior", None), "accepts_target", False)
+            or getattr(node, "kind", "") == "condition" and "target" in node.name
+            for node in self._walk(root)
+        )
 
     def start(self, robot):
         self.root.reset()

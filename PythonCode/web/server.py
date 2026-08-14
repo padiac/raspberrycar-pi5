@@ -16,6 +16,10 @@ from robot import Robot
 HTTP_PORT = int(os.environ.get("CAR_PORT", "8000"))
 
 app = Flask(__name__)
+# Jinja caches compiled templates, and with debug off it never re-reads them --
+# so edits to index.html silently do nothing until the process restarts, which
+# is a confusing way to lose half an hour. The check is cheap at this traffic.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 robot = Robot()
 
 
@@ -101,6 +105,22 @@ def api_behavior():
         robot.behavior.configure(**config)
     return jsonify(
         active=robot.behavior.name, message=message, status=robot.behavior.status()
+    )
+
+
+@app.route("/api/target", methods=["POST"])
+def api_target():
+    """Aim at an object, typically because someone tapped it in the video."""
+    data = request.get_json(silent=True) or {}
+    label = data.get("label")
+    if not label:
+        return jsonify(error="label required"), 400
+
+    ok, message = robot.set_target(label)
+    if not ok:
+        return jsonify(error=message), 409
+    return jsonify(
+        behavior=robot.behavior.name, message=message, status=robot.behavior.status()
     )
 
 

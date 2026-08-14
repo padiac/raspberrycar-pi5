@@ -6,44 +6,89 @@
 <title>RaspberryCar</title>
 <style>
   :root {
-    --bg: #14161a; --panel: #1e2228; --line: #2e343d;
+    --bg: #14161a; --panel: #1e2228; --line: #2e343d; --sunken: #171b21;
     --text: #e8ecf1; --muted: #8b95a3; --accent: #4da3ff;
     --ok: #3ecf8e; --warn: #ffb02e; --bad: #ff5c5c; --off: #5a636e;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
-    margin: 0 auto; padding: 12px; background: var(--bg); color: var(--text);
-    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 760px;
+    margin: 0 auto; padding: 0 12px 24px; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 780px;
   }
-  h1 { font-size: 17px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
-  h1 .who { margin-left: auto; font-size: 13px; font-weight: 500; color: var(--accent); }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
-  .dot.live { background: var(--ok); } .dot.dead { background: var(--bad); }
 
-  #view { width: 100%; border-radius: 10px; background: #000; display: block; aspect-ratio: 16/9; object-fit: contain; }
+  /* ---- status bar: always visible, always tells you what it is doing ---- */
+  #bar {
+    position: sticky; top: 0; z-index: 20; margin: 0 -12px 12px; padding: 10px 12px;
+    background: rgba(20, 22, 26, .94); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  #bar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+  #bar .dot.live { background: var(--ok); } #bar .dot.dead { background: var(--bad); }
+  #state { font-weight: 650; font-size: 15px; }
+  #state small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+  .chip {
+    font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--sunken); color: var(--muted);
+    white-space: nowrap;
+  }
+  .chip.moving { background: #14332a; border-color: #1f5d47; color: var(--ok); }
+  .chip.warn   { background: #3a2f1c; border-color: #6a5324; color: var(--warn); }
+  .chip.bad    { background: #3a2226; border-color: #6a3339; color: var(--bad); }
+  #estop {
+    margin-left: auto; padding: 9px 18px; font-size: 13px; font-weight: 700;
+    border-radius: 8px; cursor: pointer; letter-spacing: .04em;
+    background: #3a2226; color: #ff8f8f; border: 1px solid #5c3339;
+  }
+  #estop:active { background: var(--bad); border-color: var(--bad); color: #1a0000; }
 
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 12px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 12px; margin-top: 12px; }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  /* ---- video ---- */
+  #stage { position: relative; }
+  #view { width: 100%; border-radius: 10px; background: #000; display: block;
+          aspect-ratio: 16/9; object-fit: contain; }
+  #stage.pickable #view { cursor: crosshair; }
+  #pickhint {
+    position: absolute; left: 8px; bottom: 8px; font-size: 11px; padding: 4px 9px;
+    border-radius: 999px; background: rgba(0,0,0,.6); color: #cfe4fb; pointer-events: none;
+  }
+  #flash {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 650; color: #08121f; pointer-events: none; opacity: 0;
+    transition: opacity .25s;
+  }
+  #flash span { background: var(--accent); padding: 8px 16px; border-radius: 8px; }
+  #flash.show { opacity: 1; }
+
+  /* ---- behaviour groups ---- */
+  .group + .group { margin-top: 14px; }
+  .group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--muted); margin: 0 0 7px; font-weight: 600; }
+  .group h3 em { font-style: normal; color: #5f6874; text-transform: none;
+                 letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
   button.opt {
-    padding: 12px 10px; border-radius: 9px; cursor: pointer; text-align: left;
+    padding: 11px 12px; border-radius: 9px; cursor: pointer; text-align: left;
     background: #262c34; color: var(--text); border: 1px solid var(--line);
     font-size: 14px; font-weight: 600; line-height: 1.25;
   }
-  button.opt small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  button.opt small { display: block; font-weight: 400; font-size: 11px;
+                     color: var(--muted); margin-top: 3px; }
   button.opt.active { background: var(--accent); border-color: var(--accent); color: #08121f; }
   button.opt.active small { color: #0d2743; }
-  button.opt:disabled { opacity: .45; cursor: not-allowed; }
-  #bstatus { margin-top: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  button.opt:disabled { opacity: .4; cursor: not-allowed; }
+
+  #bstatus { margin-top: 12px; font-size: 12px; color: var(--muted);
+             font-variant-numeric: tabular-nums; }
   #bstatus.err { color: var(--bad); }
-
-  #safety { margin-top: 10px; font-size: 12px; padding: 8px 10px; border-radius: 8px;
-            background: #171b21; color: var(--muted); }
+  #safety { margin-top: 8px; font-size: 12px; padding: 8px 10px; border-radius: 8px;
+            background: var(--sunken); color: var(--muted); }
   #safety.active { background: #3a2f1c; color: var(--warn); }
-
-  /* Behaviour tree, drawn while it runs */
-  #tree { margin: 10px 0 0; padding: 10px; background: #171b21; border-radius: 8px;
+  #tree { margin: 10px 0 0; padding: 10px; background: var(--sunken); border-radius: 8px;
           font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
           color: var(--muted); overflow-x: auto; white-space: pre; }
   #tree:empty { display: none; }
@@ -52,62 +97,104 @@
   #tree .failure { color: var(--bad); }
   #tree .detail  { color: #6b7480; }
 
-  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
-  .tel div { background: #171b21; border-radius: 8px; padding: 8px 10px; }
-  .tel span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  /* ---- telemetry ---- */
+  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
+  .tel div { background: var(--sunken); border-radius: 8px; padding: 8px 10px; }
+  .tel span { display: block; color: var(--muted); font-size: 11px;
+              text-transform: uppercase; letter-spacing: .04em; }
   .tel b { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .row + .row { margin-top: 10px; }
   .row label { font-size: 13px; color: var(--muted); }
   button.toggle {
-    padding: 9px 16px; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;
-    background: #262c34; color: var(--text); border: 1px solid var(--line);
+    padding: 9px 16px; font-size: 13px; font-weight: 600; border-radius: 8px;
+    cursor: pointer; background: #262c34; color: var(--text); border: 1px solid var(--line);
   }
   button.toggle.on { background: var(--ok); border-color: var(--ok); color: #05231a; }
   input[type=range] { flex: 1; accent-color: var(--accent); }
   input[type=text] {
     flex: 1; min-width: 120px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
-    background: #171b21; border: 1px solid var(--line); color: var(--text);
+    background: var(--sunken); border: 1px solid var(--line); color: var(--text);
   }
   #objects { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 24px; }
-  #objects span { background: #22303f; border: 1px solid #2f4459; color: #bcd8f5; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
-  #objects .none { background: none; border: none; color: var(--muted); padding-left: 0; }
+  #objects button {
+    background: #22303f; border: 1px solid #2f4459; color: #bcd8f5; border-radius: 999px;
+    padding: 4px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  #objects button:hover { border-color: var(--accent); }
+  #objects button.locked { background: var(--accent); border-color: var(--accent); color: #08121f; }
+  #objects .none { color: var(--muted); font-size: 12px; padding: 4px 0; }
 
   .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   button.k {
-    padding: 18px 0; font-size: 19px; font-weight: 600; color: var(--text);
+    padding: 17px 0; font-size: 19px; font-weight: 600; color: var(--text);
     background: #262c34; border: 1px solid var(--line); border-radius: 10px;
     touch-action: manipulation; user-select: none; cursor: pointer;
   }
   button.k:active, button.k.on { background: var(--accent); border-color: var(--accent); color: #08121f; }
-  button.k.stop { background: #3a2226; border-color: #5c3339; }
-  button.k.stop:active { background: var(--bad); border-color: var(--bad); color: #1a0000; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .warn { color: var(--warn); }
 </style>
 </head>
 <body>
 
-<h1><span class="dot" id="link"></span> RaspberryCar <span class="who" id="bname">—</span></h1>
+<div id="bar">
+  <span class="dot" id="link"></span>
+  <span id="state">—<small id="substate"></small></span>
+  <span class="chip" id="movechip">idle</span>
+  <span class="chip" id="safechip">safety</span>
+  <button id="estop">STOP</button>
+</div>
 
-<img id="view" src="/stream.mjpg" alt="camera stream">
+<div id="stage">
+  <img id="view" src="/stream.mjpg" alt="camera stream">
+  <div id="pickhint" hidden>tap an object to track it</div>
+  <div id="flash"><span></span></div>
+</div>
 
 <div class="panel">
-  <h2>Behaviour</h2>
-  <div class="grid" id="behaviors"></div>
+  <h2>What it is doing</h2>
+  <div id="behaviors"></div>
   <div id="bstatus"></div>
-  <div class="row" id="targetrow" style="display:none">
-    <label>target</label>
-    <input type="text" id="target" placeholder="person">
-    <button class="toggle" id="settarget">Set</button>
-  </div>
   <div id="safety">safety layer: idle</div>
   <pre id="tree"></pre>
 </div>
 
 <div class="panel">
-  <h2>Telemetry</h2>
+  <h2>Seen right now <span style="text-transform:none;letter-spacing:0;font-weight:400">— tap to track</span></h2>
+  <div id="objects"><span class="none">detection off</span></div>
+  <div class="row" style="margin-top:12px">
+    <button class="toggle on" id="cambtn">Camera: on</button>
+    <button class="toggle" id="detbtn">Detection: off</button>
+    <button class="toggle on" id="safebtn">Safety: on</button>
+  </div>
+  <div class="row">
+    <label>conf <b id="confval">0.40</b></label>
+    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
+    <input type="text" id="target" placeholder="or type a target">
+    <button class="toggle" id="settarget">Track</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Manual control <span id="dof" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+  <div class="row"><label>Speed</label><input type="range" id="speed" min="20" max="100" value="60"><b id="speedval">60%</b></div>
+  <div class="pad" style="margin-top:10px">
+    <span></span><button class="k" data-vx="1">▲</button><span></span>
+    <button class="k" data-om="-1">↺</button>
+    <button class="k" data-vx="0" data-om="0" id="coast">•</button>
+    <button class="k" data-om="1">↻</button>
+    <span></span><button class="k" data-vx="-1">▼</button><span></span>
+  </div>
+  <div class="pad" id="strafepad" style="margin-top:10px; display:none">
+    <button class="k" data-vy="-1">◀ strafe</button><span></span><button class="k" data-vy="1">strafe ▶</button>
+  </div>
+  <p class="hint">Driving switches to Manual automatically. <b>W A S D</b> drive and turn, <b>Q E</b> strafe, space stops.</p>
+</div>
+
+<div class="panel">
+  <h2>Diagnostics</h2>
   <div class="tel">
     <div><span>Range</span><b id="range">--</b></div>
     <div><span>vx fwd</span><b id="vx">0.00</b></div>
@@ -122,46 +209,6 @@
   <p class="hint" id="hw"></p>
 </div>
 
-<div class="panel">
-  <h2>Vision</h2>
-  <div class="row">
-    <button class="toggle on" id="cambtn">Camera: on</button>
-    <button class="toggle" id="detbtn">Detection: off</button>
-    <button class="toggle on" id="safebtn">Safety: on</button>
-  </div>
-  <div class="row">
-    <label>conf <b id="confval">0.40</b></label>
-    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
-  </div>
-  <div class="row">
-    <input type="text" id="filter" placeholder="show only these classes, comma separated — blank = all 80">
-    <button class="toggle" id="applyfilter">Apply</button>
-  </div>
-  <div id="objects"><span class="none">detection off</span></div>
-</div>
-
-<div class="panel">
-  <h2>Manual control <span id="dof" style="color:var(--muted);font-weight:400"></span></h2>
-  <div class="row"><label>Speed</label><input type="range" id="speed" min="20" max="100" value="60"><b id="speedval">60%</b></div>
-  <div class="pad" style="margin-top:10px">
-    <span></span>
-    <button class="k" data-vx="1">▲</button>
-    <span></span>
-    <button class="k" data-om="-1">↺</button>
-    <button class="k stop" id="stop">STOP</button>
-    <button class="k" data-om="1">↻</button>
-    <span></span>
-    <button class="k" data-vx="-1">▼</button>
-    <span></span>
-  </div>
-  <div class="pad" id="strafepad" style="margin-top:10px; display:none">
-    <button class="k" data-vy="-1">◀ strafe</button>
-    <span></span>
-    <button class="k" data-vy="1">strafe ▶</button>
-  </div>
-  <p class="hint">Driving switches to Manual automatically. <b>W A S D</b> turn and drive; <b>Q E</b> strafe (mecanum only); space or STOP halts.</p>
-</div>
-
 <script>
 const $ = id => document.getElementById(id);
 const link = $('link'), speed = $('speed');
@@ -169,9 +216,11 @@ const link = $('link'), speed = $('speed');
 let vx = 0, vy = 0, om = 0, lastMoving = false;
 let activeBehavior = null, padActive = false;
 let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
+let detections = [], currentTarget = null, acceptsTarget = false;
 
 speed.oninput = () => $('speedval').textContent = speed.value + '%';
 const scale = () => speed.value / 100;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function post(url, body) {
   try {
@@ -184,9 +233,18 @@ async function post(url, body) {
   } catch (e) { link.className = 'dot dead'; return null; }
 }
 
+function flash(text) {
+  const el = $('flash');
+  el.firstElementChild.textContent = text;
+  el.classList.add('show');
+  clearTimeout(flash.timer);
+  flash.timer = setTimeout(() => el.classList.remove('show'), 1100);
+}
+
+// ---- driving ------------------------------------------------------------
 // Re-sends the current command ~10x/sec. The robot cuts the motors if it stops
-// hearing from us, so a dropped connection halts the car rather than leaving it
-// running at its last speed.
+// hearing from us, so a dropped connection halts the car rather than leaving
+// it running at its last speed.
 setInterval(() => {
   const moving = vx || vy || om;
   if (moving) {
@@ -200,61 +258,100 @@ setInterval(() => {
 
 const setV = (a, b, c) => { vx = a; vy = b; om = c; };
 const halt = () => { setV(0, 0, 0); post('/api/stop'); lastMoving = false; };
+$('estop').onclick = halt;
 
-// ---- behaviours ---------------------------------------------------------
-async function loadBehaviors() {
-  try {
-    const d = await (await fetch('/api/behaviors')).json();
-    const box = $('behaviors');
-    box.innerHTML = '';
-    d.behaviors.forEach(b => {
-      const el = document.createElement('button');
-      el.className = 'opt' + (b.active ? ' active' : '');
-      el.innerHTML = b.label + '<small>' +
-        (b.missing.length ? 'needs ' + b.missing.join(', ') : b.description) + '</small>';
-      el.disabled = b.missing.length > 0;
-      el.onclick = async () => {
-        const res = await post('/api/behavior', {name: b.name});
-        if (res && res.error) { $('bstatus').textContent = res.error; $('bstatus').className = 'err'; }
-        loadBehaviors();
-      };
-      box.appendChild(el);
-    });
-  } catch (e) { link.className = 'dot dead'; }
+// ---- picking a target ---------------------------------------------------
+// Maps a click on the <img> back into camera pixels. object-fit: contain means
+// the frame is letterboxed inside the element, so the bars have to come out
+// before the coordinates mean anything.
+function toFrame(img, clientX, clientY) {
+  const rect = img.getBoundingClientRect();
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  if (!nw || !nh) return null;
+  const s = Math.min(rect.width / nw, rect.height / nh);
+  const x = (clientX - rect.left - (rect.width - nw * s) / 2) / s;
+  const y = (clientY - rect.top - (rect.height - nh * s) / 2) / s;
+  return (x < 0 || y < 0 || x > nw || y > nh) ? null : {x, y};
 }
 
-$('settarget').onclick = () => post('/api/behavior/config', {target: $('target').value.trim() || 'person'});
+const boxArea = d => (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
+
+$('view').addEventListener('click', e => {
+  if (!detections.length) return;
+  const p = toFrame(e.currentTarget, e.clientX, e.clientY);
+  if (!p) return;
+  // Smallest box containing the point, so tapping something inside a large
+  // box picks the small thing rather than its container.
+  const hit = detections
+    .filter(d => d.box && p.x >= d.box[0] && p.x <= d.box[2] && p.y >= d.box[1] && p.y <= d.box[3])
+    .sort((a, b) => boxArea(a) - boxArea(b))[0];
+  if (hit) track(hit.label);
+});
+
+async function track(label) {
+  const r = await post('/api/target', {label});
+  if (r && r.error) flash(r.error);
+  else { flash('tracking ' + label); loadBehaviors(); }
+}
+
+$('settarget').onclick = () => { const v = $('target').value.trim(); if (v) track(v); };
 $('target').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('settarget').click();
   e.stopPropagation();
 });
 
-// ---- toggles ------------------------------------------------------------
-function wireToggle(id, label, get, set, endpoint, key) {
-  $(id).onclick = async () => {
-    const r = await post(endpoint, {[key]: !get()});
-    if (r && !r.error) set(r[key] !== undefined ? r[key] : !get());
-  };
+// ---- behaviours, grouped ------------------------------------------------
+const GROUPS = [
+  ['control', 'Control', 'always available'],
+  ['skill',   'Skills',  'one capability, runs until you stop it'],
+  ['mission', 'Missions', 'a task with a goal — succeeds or fails'],
+];
+
+async function loadBehaviors() {
+  try {
+    const d = await (await fetch('/api/behaviors')).json();
+    const box = $('behaviors');
+    box.innerHTML = '';
+    GROUPS.forEach(([key, title, note]) => {
+      const items = d.behaviors.filter(b => (b.category || 'skill') === key);
+      if (!items.length) return;
+      const group = document.createElement('div');
+      group.className = 'group';
+      group.innerHTML = '<h3>' + title + '<em>' + note + '</em></h3>';
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      items.forEach(b => {
+        const el = document.createElement('button');
+        el.className = 'opt' + (b.active ? ' active' : '');
+        el.innerHTML = esc(b.label) + '<small>' +
+          esc(b.missing.length ? 'needs ' + b.missing.join(', ') : b.description) + '</small>';
+        el.disabled = b.missing.length > 0;
+        el.onclick = async () => {
+          const res = await post('/api/behavior', {name: b.name});
+          if (res && res.error) { $('bstatus').textContent = res.error; $('bstatus').className = 'err'; }
+          loadBehaviors();
+        };
+        grid.appendChild(el);
+      });
+      group.appendChild(grid);
+      box.appendChild(group);
+    });
+  } catch (e) { link.className = 'dot dead'; }
 }
+
+// ---- toggles ------------------------------------------------------------
 function applyCamera(on) { cameraOn = on; $('cambtn').textContent = 'Camera: ' + (on ? 'on' : 'off'); $('cambtn').classList.toggle('on', on); }
 function applyDetect(on) { detectOn = on; $('detbtn').textContent = 'Detection: ' + (on ? 'on' : 'off'); $('detbtn').classList.toggle('on', on); }
 function applySafety(on) { safetyOn = on; $('safebtn').textContent = 'Safety: ' + (on ? 'on' : 'off'); $('safebtn').classList.toggle('on', on); }
 
-wireToggle('cambtn', 'Camera', () => cameraOn, applyCamera, '/api/camera', 'enabled');
-wireToggle('detbtn', 'Detection', () => detectOn, applyDetect, '/api/detect', 'enabled');
-wireToggle('safebtn', 'Safety', () => safetyOn, applySafety, '/api/safety', 'enabled');
+$('cambtn').onclick = async () => { const r = await post('/api/camera', {enabled: !cameraOn}); if (r && !r.error) applyCamera(r.enabled); };
+$('detbtn').onclick = async () => { const r = await post('/api/detect', {enabled: !detectOn}); if (r && !r.error) applyDetect(r.enabled); };
+$('safebtn').onclick = async () => { const r = await post('/api/safety', {enabled: !safetyOn}); if (r && !r.error) applySafety(r.enabled); };
 
 $('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
 $('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
-$('applyfilter').onclick = () => post('/api/detect', {
-  classes: $('filter').value.split(',').map(s => s.trim()).filter(Boolean)
-});
-$('filter').addEventListener('keydown', e => {
-  if (e.key === 'Enter') $('applyfilter').click();
-  e.stopPropagation();
-});
 
-// ---- touch / mouse ------------------------------------------------------
+// ---- touch / mouse / keyboard / gamepad ---------------------------------
 document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]').forEach(btn => {
   const press = e => {
     e.preventDefault();
@@ -265,9 +362,7 @@ document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]
   btn.addEventListener('pointerdown', press);
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, release));
 });
-$('stop').addEventListener('pointerdown', e => { e.preventDefault(); halt(); });
 
-// ---- keyboard -----------------------------------------------------------
 const keys = new Set();
 const KEYMAP = {
   KeyW: 'fwd', ArrowUp: 'fwd', KeyS: 'back', ArrowDown: 'back',
@@ -285,51 +380,98 @@ addEventListener('keydown', e => {
   const k = KEYMAP[e.code];
   if (k) { e.preventDefault(); keys.add(k); fromKeys(); }
 });
-addEventListener('keyup', e => {
-  const k = KEYMAP[e.code];
-  if (k) { e.preventDefault(); keys.delete(k); fromKeys(); }
-});
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) { e.preventDefault(); keys.delete(k); fromKeys(); } });
 addEventListener('blur', halt);
 
-// ---- gamepad ------------------------------------------------------------
-const DEAD = 0.12;
-const dz = v => Math.abs(v) < DEAD ? 0 : v;
+const DEAD = 0.12, dz = v => Math.abs(v) < DEAD ? 0 : v;
 function pollPad() {
   const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(p => p);
   if (pad) {
     $('gp').textContent = 'connected';
-    const f = dz(-pad.axes[1]);                     // left stick Y: drive
-    const s = dof >= 3 ? dz(pad.axes[0]) : 0;       // left stick X: strafe
-    const t = dz(pad.axes[2] !== undefined ? pad.axes[2] : 0);  // right stick X: turn
+    const f = dz(-pad.axes[1]);
+    const s = dof >= 3 ? dz(pad.axes[0]) : 0;
+    const t = dz(pad.axes[2] !== undefined ? pad.axes[2] : 0);
     if (f || s || t) { padActive = true; setV(f, s, t); }
     else if (padActive) { padActive = false; setV(0, 0, 0); }
     if (pad.buttons[1] && pad.buttons[1].pressed) halt();
-  } else {
-    $('gp').textContent = 'none';
-    padActive = false;
-  }
+  } else { $('gp').textContent = 'none'; padActive = false; }
   requestAnimationFrame(pollPad);
 }
 requestAnimationFrame(pollPad);
 
 // ---- behaviour tree drawing ---------------------------------------------
-// Turns the nested describe() into an indented tree, colouring whichever nodes
-// are currently running so the task is visible while it happens.
-const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-
 function renderTree(node, prefix = '', isLast = true, isRoot = true) {
   const mark = {running: '▶', success: '✓', failure: '✗'}[node.status] || '·';
   const branch = isRoot ? '' : (isLast ? '└─ ' : '├─ ');
   const detail = node.detail ? ' <span class="detail">' + esc(node.detail) + '</span>' : '';
-  let out = prefix + branch +
-    '<span class="' + (node.status || '') + '">' + mark + ' ' + esc(node.name) + '</span>' +
-    detail + '\n';
+  let out = prefix + branch + '<span class="' + (node.status || '') + '">' +
+            mark + ' ' + esc(node.name) + '</span>' + detail + '\n';
   const kids = node.children || [];
   const childPrefix = prefix + (isRoot ? '' : (isLast ? '   ' : '│  '));
-  kids.forEach((kid, i) => {
-    out += renderTree(kid, childPrefix, i === kids.length - 1, false);
-  });
+  kids.forEach((kid, i) => { out += renderTree(kid, childPrefix, i === kids.length - 1, false); });
   return out;
+}
+
+// ---- the "seen right now" chips -----------------------------------------
+// Only rebuilt when the set of labels changes. Recreating the buttons on every
+// poll would swallow a tap that landed mid-refresh, which is exactly when
+// someone is most likely to be aiming at one.
+const seenAt = new Map();     // label -> when it was last detected
+const LINGER = 2500;          // keep a chip this long after it drops out
+
+function renderObjects(d) {
+  const box = $('objects');
+  const now = Date.now();
+
+  // Detections near the confidence threshold blink in and out, so a label
+  // lingers a moment after its last sighting.
+  detections.forEach(o => seenAt.set(o.label, now));
+  for (const [label, when] of seenAt) {
+    if (now - when > LINGER) seenAt.delete(label);
+  }
+  const labels = [...seenAt.keys()].sort();
+
+  // Reconcile rather than re-render: buttons that should still be there are
+  // left alone, so a tap can never land on an element that is about to be
+  // replaced. Rebuilding the list wholesale was swallowing clicks.
+  const existing = new Map(
+    [...box.querySelectorAll('button')].map(b => [b.dataset.label, b])
+  );
+  for (const [label, el] of existing) {
+    if (!labels.includes(label)) { el.remove(); existing.delete(label); }
+  }
+  const note = box.querySelector('.none');
+  if (labels.length && note) note.remove();
+
+  labels.forEach(label => {
+    let b = existing.get(label);
+    if (!b) {
+      b = document.createElement('button');
+      b.dataset.label = label;
+      b.onclick = () => track(label);
+      box.appendChild(b);
+    }
+    const best = detections
+      .filter(o => o.label === label)
+      .reduce((a, o) => (!a || o.conf > a.conf ? o : a), null);
+    b.textContent = best ? label + ' ' + best.conf.toFixed(2) : label + ' —';
+    b.style.opacity = best ? '1' : '.5';
+    b.classList.toggle('locked',
+      !!currentTarget && label.toLowerCase() === String(currentTarget).toLowerCase());
+  });
+
+  if (!labels.length) {
+    const text = !d.camera_enabled ? 'camera off'
+      : d.detect_enabled ? 'nothing detected'
+      : 'detection off — switch it on to track objects';
+    if (note) note.textContent = text;
+    else {
+      const el = document.createElement('span');
+      el.className = 'none';
+      el.textContent = text;
+      box.appendChild(el);
+    }
+  }
 }
 
 // ---- telemetry ----------------------------------------------------------
@@ -338,33 +480,46 @@ async function telemetry() {
     const d = await (await fetch('/api/telemetry')).json();
     link.className = 'dot live';
 
-    $('bname').textContent = d.behavior_label;
-    if (d.behavior !== activeBehavior) { activeBehavior = d.behavior; loadBehaviors(); }
-    $('targetrow').style.display =
-      (d.behavior_status && 'target' in d.behavior_status) ? 'flex' : 'none';
-
+    // -- status bar --
+    $('state').firstChild.textContent = d.behavior_label;
     const st = d.behavior_status || {};
+    $('substate').textContent = d.behavior_error || st.state || st.path || st.reason || '';
+    currentTarget = st.target || null;
+    acceptsTarget = !!d.accepts_target;
+
+    const mv = $('movechip');
+    mv.textContent = d.moving ? 'moving' : 'idle';
+    mv.className = 'chip' + (d.moving ? ' moving' : '');
+
+    const sf = d.safety || {};
+    const sc = $('safechip');
+    if (sf.enabled === false) { sc.textContent = 'safety off'; sc.className = 'chip bad'; }
+    else if (sf.intervened) { sc.textContent = 'safety holding'; sc.className = 'chip warn'; }
+    else { sc.textContent = 'safety ok'; sc.className = 'chip'; }
+
+    // -- behaviour detail --
+    if (d.behavior !== activeBehavior) { activeBehavior = d.behavior; loadBehaviors(); }
     if (d.behavior_error) { $('bstatus').textContent = d.behavior_error; $('bstatus').className = 'err'; }
     else {
-      // 'tree' is rendered separately below; keep it out of the one-line summary.
-      $('bstatus').textContent = Object.entries(st)
-        .filter(([k]) => k !== 'tree')
+      $('bstatus').textContent = Object.entries(st).filter(([k]) => k !== 'tree')
         .map(([k, v]) => k + ': ' + v).join('  ·  ');
       $('bstatus').className = '';
     }
     $('tree').innerHTML = st.tree ? renderTree(st.tree) : '';
 
-    // Safety layer: show when it is actively cutting the request back.
-    const sf = d.safety || {};
-    if (sf.intervened) {
-      $('safety').className = 'active';
-      $('safety').textContent = '⚠ safety: ' + sf.reasons.join('; ');
-    } else {
-      $('safety').className = '';
-      $('safety').textContent = sf.enabled === false
-        ? 'safety layer: DISABLED' : 'safety layer: clear';
-    }
+    $('safety').className = sf.intervened ? 'active' : '';
+    $('safety').textContent = sf.intervened ? '⚠ ' + sf.reasons.join('; ')
+      : (sf.enabled === false ? 'safety layer: DISABLED' : 'safety layer: clear');
 
+    // -- detections, tappable --
+    detections = d.objects || [];
+    const stage = $('stage');
+    stage.classList.toggle('pickable', detections.length > 0);
+    $('pickhint').hidden = !detections.length;
+
+    renderObjects(d);
+
+    // -- diagnostics --
     const a = d.allowed || {vx: 0, vy: 0, omega: 0};
     $('range').textContent = d.range_cm === null ? '--' : d.range_cm + ' cm';
     $('vx').textContent = a.vx.toFixed(2);
@@ -381,16 +536,8 @@ async function telemetry() {
 
     if (d.drivetrain) {
       dof = d.drivetrain.dof;
-      $('dof').textContent = '· ' + d.drivetrain.label;
+      $('dof').textContent = '— ' + d.drivetrain.label;
       $('strafepad').style.display = dof >= 3 ? 'grid' : 'none';
-    }
-
-    const box = $('objects');
-    if (!d.objects || !d.objects.length) {
-      box.innerHTML = '<span class="none">' + (!d.camera_enabled ? 'camera off'
-        : d.detect_enabled ? 'nothing detected' : 'detection off') + '</span>';
-    } else {
-      box.innerHTML = d.objects.map(o => '<span>' + o.label + ' ' + o.conf.toFixed(2) + '</span>').join('');
     }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);

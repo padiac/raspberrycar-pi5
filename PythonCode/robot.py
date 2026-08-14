@@ -92,6 +92,8 @@ class Robot:
                 "name": b.name,
                 "label": b.label,
                 "description": b.description,
+                "category": getattr(b, "category", "skill"),
+                "accepts_target": getattr(b, "accepts_target", False),
                 "requires": list(b.requires),
                 "missing": self.missing_for(b),
                 "active": b is self.behavior,
@@ -135,6 +137,29 @@ class Robot:
         self.select("idle")
         with self.lock:
             self._drive(Velocity.STOP)
+
+    def set_target(self, label):
+        """Point whatever is running at `label`, or start following it.
+
+        Called when someone taps an object in the video. If the current
+        behaviour already chases a named thing -- follow, or a mission with a
+        follow leaf -- just retarget it and carry on; otherwise following is
+        the obvious thing they meant.
+        """
+        label = str(label).strip().lower()
+        if not label:
+            return False, "no label"
+
+        with self.lock:
+            if getattr(self.behavior, "accepts_target", False):
+                self.behavior.configure(target=label)
+                return True, f"{self.behavior.label} now tracking {label}"
+
+        ok, message = self.select("follow")
+        if not ok:
+            return False, message
+        self.behaviors["follow"].configure(target=label)
+        return True, f"following {label}"
 
     def manual(self, velocity):
         """Feed the manual behaviour, selecting it so the controls just work."""
@@ -212,6 +237,9 @@ class Robot:
             "behavior_label": self.behavior.label,
             "behavior_status": self.behavior.status(),
             "behavior_error": self.behavior_error,
+            "behavior_category": getattr(self.behavior, "category", "skill"),
+            "accepts_target": getattr(self.behavior, "accepts_target", False),
+            "moving": self.allowed.moving,
             "requested": self.requested.as_dict(),
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
@@ -223,7 +251,12 @@ class Robot:
             "detect_fps": round(self.vision.detect_fps, 1) if self.vision else 0.0,
             "detect_enabled": self.vision.detect_enabled if self.vision else False,
             "camera_enabled": bool(self.camera and self.camera.enabled),
-            "objects": [d.as_dict() for d in world.detections],
+            # Boxes go out too so the page can work out which object was
+            # tapped without asking the robot to hit-test for it.
+            "objects": [
+                {**d.as_dict(), "box": list(d.box)} for d in world.detections
+            ],
+            "frame_size": list(world.frame_size),
             "detector": self.detector.status() if self.detector else None,
             "available": self.available,
         }

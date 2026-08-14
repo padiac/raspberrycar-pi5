@@ -16,6 +16,7 @@ class IdleBehavior(Behavior):
     name = "idle"
     label = "Stopped"
     description = "Motors off. Camera and telemetry keep running."
+    category = "control"
 
     def update(self, robot, world):
         return Velocity.STOP
@@ -25,6 +26,7 @@ class ManualBehavior(Behavior):
     name = "manual"
     label = "Manual"
     description = "You drive: touch buttons, WASD or a gamepad."
+    category = "control"
     requires = ("motors",)
 
     def __init__(self):

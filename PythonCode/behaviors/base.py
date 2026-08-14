@@ -20,6 +20,17 @@ class Behavior:
     #: What the UI shows.
     label = "Base"
     description = ""
+    #: How the UI files this. Not cosmetic -- these are genuinely different
+    #: kinds of thing, and listing them together is what made the old UI read
+    #: as a pile of demos:
+    #:   control  the baseline: stopped, driven by hand. Always available.
+    #:   skill    one capability, runs until you stop it. A building block --
+    #:            missions are assembled out of these.
+    #:   mission  a composed task with a goal, which succeeds or fails.
+    category = "skill"
+    #: True if this behaviour follows a named object, so the UI knows whether
+    #: picking a target on the video means anything here.
+    accepts_target = False
     #: Hardware this behaviour cannot work without. The robot refuses to select
     #: a behaviour whose requirements are unmet, rather than failing later.
     #: Valid keys: motors, camera, detector, rangefinder, proximity, floor

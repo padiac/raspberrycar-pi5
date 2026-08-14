@@ -37,6 +37,7 @@ class FollowBehavior(Behavior):
     description = "Locks onto a chosen object, keeps it centred and at distance."
     requires = ("motors", "camera", "detector")
     wants_detection = True
+    accepts_target = True
 
     def __init__(self, target="person"):
         self.target = target
