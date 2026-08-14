@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>RaspberryCar</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1e2228; --line: #2e343d;
+    --text: #e8ecf1; --muted: #8b95a3; --accent: #4da3ff;
+    --ok: #3ecf8e; --warn: #ffb02e; --bad: #ff5c5c; --off: #5a636e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0 auto; padding: 12px; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 760px;
+  }
+  h1 { font-size: 17px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  h1 .who { margin-left: auto; font-size: 13px; font-weight: 500; color: var(--accent); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+  .dot.live { background: var(--ok); } .dot.dead { background: var(--bad); }
+
+  #view { width: 100%; border-radius: 10px; background: #000; display: block; aspect-ratio: 16/9; object-fit: contain; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 12px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  button.opt {
+    padding: 12px 10px; border-radius: 9px; cursor: pointer; text-align: left;
+    background: #262c34; color: var(--text); border: 1px solid var(--line);
+    font-size: 14px; font-weight: 600; line-height: 1.25;
+  }
+  button.opt small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  button.opt.active { background: var(--accent); border-color: var(--accent); color: #08121f; }
+  button.opt.active small { color: #0d2743; }
+  button.opt:disabled { opacity: .45; cursor: not-allowed; }
+  #bstatus { margin-top: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #bstatus.err { color: var(--bad); }
+
+  #safety { margin-top: 10px; font-size: 12px; padding: 8px 10px; border-radius: 8px;
+            background: #171b21; color: var(--muted); }
+  #safety.active { background: #3a2f1c; color: var(--warn); }
+
+  .tel { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
+  .tel div { background: #171b21; border-radius: 8px; padding: 8px 10px; }
+  .tel span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .tel b { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row + .row { margin-top: 10px; }
+  .row label { font-size: 13px; color: var(--muted); }
+  button.toggle {
+    padding: 9px 16px; font-size: 13px; font-weight: 600; border-radius: 8px; cursor: pointer;
+    background: #262c34; color: var(--text); border: 1px solid var(--line);
+  }
+  button.toggle.on { background: var(--ok); border-color: var(--ok); color: #05231a; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  input[type=text] {
+    flex: 1; min-width: 120px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+    background: #171b21; border: 1px solid var(--line); color: var(--text);
+  }
+  #objects { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 24px; }
+  #objects span { background: #22303f; border: 1px solid #2f4459; color: #bcd8f5; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  #objects .none { background: none; border: none; color: var(--muted); padding-left: 0; }
+
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  button.k {
+    padding: 18px 0; font-size: 19px; font-weight: 600; color: var(--text);
+    background: #262c34; border: 1px solid var(--line); border-radius: 10px;
+    touch-action: manipulation; user-select: none; cursor: pointer;
+  }
+  button.k:active, button.k.on { background: var(--accent); border-color: var(--accent); color: #08121f; }
+  button.k.stop { background: #3a2226; border-color: #5c3339; }
+  button.k.stop:active { background: var(--bad); border-color: var(--bad); color: #1a0000; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .warn { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1><span class="dot" id="link"></span> RaspberryCar <span class="who" id="bname">—</span></h1>
+
+<img id="view" src="/stream.mjpg" alt="camera stream">
+
+<div class="panel">
+  <h2>Behaviour</h2>
+  <div class="grid" id="behaviors"></div>
+  <div id="bstatus"></div>
+  <div class="row" id="targetrow" style="display:none">
+    <label>target</label>
+    <input type="text" id="target" placeholder="person">
+    <button class="toggle" id="settarget">Set</button>
+  </div>
+  <div id="safety">safety layer: idle</div>
+</div>
+
+<div class="panel">
+  <h2>Telemetry</h2>
+  <div class="tel">
+    <div><span>Range</span><b id="range">--</b></div>
+    <div><span>vx fwd</span><b id="vx">0.00</b></div>
+    <div><span>vy strafe</span><b id="vy">0.00</b></div>
+    <div><span>ω turn</span><b id="om">0.00</b></div>
+    <div><span>Proximity</span><b id="prox">--</b></div>
+    <div><span>Floor</span><b id="floor">--</b></div>
+    <div><span>Stream fps</span><b id="sfps">--</b></div>
+    <div><span>Detect fps</span><b id="dfps">--</b></div>
+    <div><span>Gamepad</span><b id="gp">none</b></div>
+  </div>
+  <p class="hint" id="hw"></p>
+</div>
+
+<div class="panel">
+  <h2>Vision</h2>
+  <div class="row">
+    <button class="toggle on" id="cambtn">Camera: on</button>
+    <button class="toggle" id="detbtn">Detection: off</button>
+    <button class="toggle on" id="safebtn">Safety: on</button>
+  </div>
+  <div class="row">
+    <label>conf <b id="confval">0.40</b></label>
+    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
+  </div>
+  <div class="row">
+    <input type="text" id="filter" placeholder="show only these classes, comma separated — blank = all 80">
+    <button class="toggle" id="applyfilter">Apply</button>
+  </div>
+  <div id="objects"><span class="none">detection off</span></div>
+</div>
+
+<div class="panel">
+  <h2>Manual control <span id="dof" style="color:var(--muted);font-weight:400"></span></h2>
+  <div class="row"><label>Speed</label><input type="range" id="speed" min="20" max="100" value="60"><b id="speedval">60%</b></div>
+  <div class="pad" style="margin-top:10px">
+    <span></span>
+    <button class="k" data-vx="1">▲</button>
+    <span></span>
+    <button class="k" data-om="-1">↺</button>
+    <button class="k stop" id="stop">STOP</button>
+    <button class="k" data-om="1">↻</button>
+    <span></span>
+    <button class="k" data-vx="-1">▼</button>
+    <span></span>
+  </div>
+  <div class="pad" id="strafepad" style="margin-top:10px; display:none">
+    <button class="k" data-vy="-1">◀ strafe</button>
+    <span></span>
+    <button class="k" data-vy="1">strafe ▶</button>
+  </div>
+  <p class="hint">Driving switches to Manual automatically. <b>W A S D</b> turn and drive; <b>Q E</b> strafe (mecanum only); space or STOP halts.</p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const link = $('link'), speed = $('speed');
+
+let vx = 0, vy = 0, om = 0, lastMoving = false;
+let activeBehavior = null, padActive = false;
+let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
+
+speed.oninput = () => $('speedval').textContent = speed.value + '%';
+const scale = () => speed.value / 100;
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {})
+    });
+    link.className = 'dot live';
+    return await r.json();
+  } catch (e) { link.className = 'dot dead'; return null; }
+}
+
+// Re-sends the current command ~10x/sec. The robot cuts the motors if it stops
+// hearing from us, so a dropped connection halts the car rather than leaving it
+// running at its last speed.
+setInterval(() => {
+  const moving = vx || vy || om;
+  if (moving) {
+    post('/api/drive', {vx: vx * scale(), vy: vy * scale(), omega: om * scale()});
+    lastMoving = true;
+  } else if (lastMoving) {
+    post('/api/drive', {vx: 0, vy: 0, omega: 0});
+    lastMoving = false;
+  }
+}, 100);
+
+const setV = (a, b, c) => { vx = a; vy = b; om = c; };
+const halt = () => { setV(0, 0, 0); post('/api/stop'); lastMoving = false; };
+
+// ---- behaviours ---------------------------------------------------------
+async function loadBehaviors() {
+  try {
+    const d = await (await fetch('/api/behaviors')).json();
+    const box = $('behaviors');
+    box.innerHTML = '';
+    d.behaviors.forEach(b => {
+      const el = document.createElement('button');
+      el.className = 'opt' + (b.active ? ' active' : '');
+      el.innerHTML = b.label + '<small>' +
+        (b.missing.length ? 'needs ' + b.missing.join(', ') : b.description) + '</small>';
+      el.disabled = b.missing.length > 0;
+      el.onclick = async () => {
+        const res = await post('/api/behavior', {name: b.name});
+        if (res && res.error) { $('bstatus').textContent = res.error; $('bstatus').className = 'err'; }
+        loadBehaviors();
+      };
+      box.appendChild(el);
+    });
+  } catch (e) { link.className = 'dot dead'; }
+}
+
+$('settarget').onclick = () => post('/api/behavior/config', {target: $('target').value.trim() || 'person'});
+$('target').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('settarget').click();
+  e.stopPropagation();
+});
+
+// ---- toggles ------------------------------------------------------------
+function wireToggle(id, label, get, set, endpoint, key) {
+  $(id).onclick = async () => {
+    const r = await post(endpoint, {[key]: !get()});
+    if (r && !r.error) set(r[key] !== undefined ? r[key] : !get());
+  };
+}
+function applyCamera(on) { cameraOn = on; $('cambtn').textContent = 'Camera: ' + (on ? 'on' : 'off'); $('cambtn').classList.toggle('on', on); }
+function applyDetect(on) { detectOn = on; $('detbtn').textContent = 'Detection: ' + (on ? 'on' : 'off'); $('detbtn').classList.toggle('on', on); }
+function applySafety(on) { safetyOn = on; $('safebtn').textContent = 'Safety: ' + (on ? 'on' : 'off'); $('safebtn').classList.toggle('on', on); }
+
+wireToggle('cambtn', 'Camera', () => cameraOn, applyCamera, '/api/camera', 'enabled');
+wireToggle('detbtn', 'Detection', () => detectOn, applyDetect, '/api/detect', 'enabled');
+wireToggle('safebtn', 'Safety', () => safetyOn, applySafety, '/api/safety', 'enabled');
+
+$('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
+$('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
+$('applyfilter').onclick = () => post('/api/detect', {
+  classes: $('filter').value.split(',').map(s => s.trim()).filter(Boolean)
+});
+$('filter').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('applyfilter').click();
+  e.stopPropagation();
+});
+
+// ---- touch / mouse ------------------------------------------------------
+document.querySelectorAll('button.k[data-vx],button.k[data-vy],button.k[data-om]').forEach(btn => {
+  const press = e => {
+    e.preventDefault();
+    setV(+(btn.dataset.vx || 0), +(btn.dataset.vy || 0), +(btn.dataset.om || 0));
+    btn.classList.add('on');
+  };
+  const release = e => { e.preventDefault(); setV(0, 0, 0); btn.classList.remove('on'); };
+  btn.addEventListener('pointerdown', press);
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, release));
+});
+$('stop').addEventListener('pointerdown', e => { e.preventDefault(); halt(); });
+
+// ---- keyboard -----------------------------------------------------------
+const keys = new Set();
+const KEYMAP = {
+  KeyW: 'fwd', ArrowUp: 'fwd', KeyS: 'back', ArrowDown: 'back',
+  KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
+  KeyQ: 'sleft', KeyE: 'sright'
+};
+function fromKeys() {
+  if (padActive) return;
+  setV((keys.has('fwd') ? 1 : 0) + (keys.has('back') ? -1 : 0),
+       (keys.has('sright') ? 1 : 0) + (keys.has('sleft') ? -1 : 0),
+       (keys.has('right') ? 1 : 0) + (keys.has('left') ? -1 : 0));
+}
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); halt(); return; }
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); keys.add(k); fromKeys(); }
+});
+addEventListener('keyup', e => {
+  const k = KEYMAP[e.code];
+  if (k) { e.preventDefault(); keys.delete(k); fromKeys(); }
+});
+addEventListener('blur', halt);
+
+// ---- gamepad ------------------------------------------------------------
+const DEAD = 0.12;
+const dz = v => Math.abs(v) < DEAD ? 0 : v;
+function pollPad() {
+  const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(p => p);
+  if (pad) {
+    $('gp').textContent = 'connected';
+    const f = dz(-pad.axes[1]);                     // left stick Y: drive
+    const s = dof >= 3 ? dz(pad.axes[0]) : 0;       // left stick X: strafe
+    const t = dz(pad.axes[2] !== undefined ? pad.axes[2] : 0);  // right stick X: turn
+    if (f || s || t) { padActive = true; setV(f, s, t); }
+    else if (padActive) { padActive = false; setV(0, 0, 0); }
+    if (pad.buttons[1] && pad.buttons[1].pressed) halt();
+  } else {
+    $('gp').textContent = 'none';
+    padActive = false;
+  }
+  requestAnimationFrame(pollPad);
+}
+requestAnimationFrame(pollPad);
+
+// ---- telemetry ----------------------------------------------------------
+async function telemetry() {
+  try {
+    const d = await (await fetch('/api/telemetry')).json();
+    link.className = 'dot live';
+
+    $('bname').textContent = d.behavior_label;
+    if (d.behavior !== activeBehavior) { activeBehavior = d.behavior; loadBehaviors(); }
+    $('targetrow').style.display =
+      (d.behavior_status && 'target' in d.behavior_status) ? 'flex' : 'none';
+
+    if (d.behavior_error) { $('bstatus').textContent = d.behavior_error; $('bstatus').className = 'err'; }
+    else {
+      const s = d.behavior_status || {};
+      $('bstatus').textContent = Object.entries(s).map(([k, v]) => k + ': ' + v).join('  ·  ');
+      $('bstatus').className = '';
+    }
+
+    // Safety layer: show when it is actively cutting the request back.
+    const sf = d.safety || {};
+    if (sf.intervened) {
+      $('safety').className = 'active';
+      $('safety').textContent = '⚠ safety: ' + sf.reasons.join('; ');
+    } else {
+      $('safety').className = '';
+      $('safety').textContent = sf.enabled === false
+        ? 'safety layer: DISABLED' : 'safety layer: clear';
+    }
+
+    const a = d.allowed || {vx: 0, vy: 0, omega: 0};
+    $('range').textContent = d.range_cm === null ? '--' : d.range_cm + ' cm';
+    $('vx').textContent = a.vx.toFixed(2);
+    $('vy').textContent = a.vy.toFixed(2);
+    $('om').textContent = a.omega.toFixed(2);
+    $('prox').textContent = d.proximity ? (d.proximity.left ? 'L' : '-') + ' / ' + (d.proximity.right ? 'R' : '-') : '--';
+    $('floor').textContent = d.floor ? (d.floor.left ? '1' : '0') + ' / ' + (d.floor.right ? '1' : '0') : '--';
+    $('sfps').textContent = d.camera_enabled ? (d.stream_fps || '--') : 'off';
+    $('dfps').textContent = d.detect_enabled ? (d.detect_fps || '...') : 'off';
+
+    if (d.camera_enabled !== cameraOn) applyCamera(d.camera_enabled);
+    if (d.detect_enabled !== detectOn) applyDetect(d.detect_enabled);
+    if (sf.enabled !== undefined && sf.enabled !== safetyOn) applySafety(sf.enabled);
+
+    if (d.drivetrain) {
+      dof = d.drivetrain.dof;
+      $('dof').textContent = '· ' + d.drivetrain.label;
+      $('strafepad').style.display = dof >= 3 ? 'grid' : 'none';
+    }
+
+    const box = $('objects');
+    if (!d.objects || !d.objects.length) {
+      box.innerHTML = '<span class="none">' + (!d.camera_enabled ? 'camera off'
+        : d.detect_enabled ? 'nothing detected' : 'detection off') + '</span>';
+    } else {
+      box.innerHTML = d.objects.map(o => '<span>' + o.label + ' ' + o.conf.toFixed(2) + '</span>').join('');
+    }
+
+    const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
+    $('hw').innerHTML = missing.length
+      ? '<span class="warn">unavailable: ' + missing.join(', ') + '</span>'
+      : 'all hardware online' + (d.detector ? ' · detector: ' + d.detector.backend : '');
+  } catch (e) { link.className = 'dot dead'; }
+}
+
+loadBehaviors();
+telemetry();
+setInterval(telemetry, 500);
+</script>
+</body>
+</html>

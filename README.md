@@ -12,39 +12,95 @@ This fork runs the car on a **Raspberry Pi 5 / Debian 12 (Bookworm)** with an
 **IMX219** camera, and adds a single-process web-controlled runtime on top of
 the original's hardware drivers.
 
-## What's new: one runtime, switchable modes
+## What's new: one runtime, four layers
 
 The original is six standalone programs (`main_*.py`), each grabbing the camera
-and GPIO for itself — so only one behaviour could run at a time and you
-couldn't watch it while it did. This fork adds a single process that owns the
-hardware, with the behaviour chosen at runtime:
+and GPIO for itself — so only one behaviour could run at a time, you couldn't
+watch it while it did, and nothing could be combined with anything else. This
+fork replaces them with one process, split by responsibility:
 
 ```
-web_server.py       HTTP only, no logic
-      │
-robot.py            owns all hardware, runs a 20 Hz control loop
-   ┌──┴──┐
-vision.py          modes/
-(capture,          base.py  ·  idle  manual  avoid  follow  lane
- detect,
- MJPEG)
+                perception  →  behaviour  →  safety  →  drivetrain
+                what is out    what I want   what I am   wheel speeds
+                there          to do         allowed
+```
+
+Each arrow is the only way information crosses that boundary. A behaviour
+cannot reach a motor, the safety layer cannot see the camera, and the
+drivetrain has no idea why it was asked to move.
+
+```
+main.py                     entry point
+robot.py                    wires the layers, runs a 20 Hz control loop
+
+hal/          drivetrain.py Velocity(vx, vy, omega) + differential/mecanum kinematics
+              sensors.py    rangefinder, proximity, floor
+              camera.py     picamera2
+              gpio.py       gpiochip detection
+
+perception/   types.py      Detection, WorldState
+              detector.py   YOLO26n
+              lane.py       lane finding
+              pipeline.py   capture + detect threads, MJPEG
+
+control/      safety.py     the reflex layer
+              pid.py
+
+behaviors/    simple.py     idle, manual
+              patrol.py  follow.py  lane.py
+              composite.py  state machine over other behaviours
+
+web/          server.py     HTTP only, no logic
 ```
 
 Run it, then open `http://<pi-ip>:8000` from a PC or phone:
 
 ```
 cd PythonCode
-python3 web_server.py
+python3 main.py
 ```
 
-It gives you a live 1280x720 MJPEG stream, driving by touch / WASD / gamepad,
-YOLO26 object detection overlaid on the video, live sensor telemetry, and
-mode switching. Adding a behaviour means subclassing `DriveMode` and listing it
-in `modes/build_modes()` — the API and UI pick it up automatically.
+Behaviours: **Stopped**, **Manual**, **Patrol**, **Follow object** (locks onto
+any of the 80 COCO classes — the generalised version of the original tennis
+tracking), **Search and approach**, **Lane following**. Adding one means
+subclassing `Behavior` and listing it in `behaviors.build_behaviors()`; the API
+and the web UI pick it up from there.
 
-Modes: **Stopped**, **Manual**, **Obstacle avoidance**, **Follow object**
-(locks onto any of the 80 COCO classes — the generalised version of the
-original tennis tracking), **Lane following**.
+### Obstacle avoidance is a layer, not a mode
+
+Upstream had a `main_obstacle_avoidance.py`, which meant you got avoidance *or*
+you got lane following, never both. Here every velocity request — from a
+behaviour or from a human at the keyboard — passes through `control/safety.py`
+on the way to the wheels, so manual driving, lane following and object
+following are all protected by the same code.
+
+That layer **only ever removes motion, never adds any**. It can slow you down,
+clamp an axis or refuse outright, but it will not steer for you: a safety layer
+that injects its own movement ends up fighting the behaviour above it, and the
+result is oscillation nobody can debug. Deciding *where to go instead* is
+intent, and intent belongs to behaviours. `Patrol` is the illustration — it
+simply asks to drive forward, notices the safety layer keeps zeroing that, and
+picks a new direction itself.
+
+### Composing behaviours
+
+Real tasks are not one behaviour forever. `behaviors/composite.py` is a small
+state machine over other behaviours, and because a composite is itself a
+`Behavior`, the robot cannot tell the difference and composites can nest.
+**Search and approach** is the worked example: spin on the spot until the
+target appears, follow it in, stop when it fills enough of the frame.
+
+### Mecanum
+
+`hal/drivetrain.py` speaks `Velocity(vx, vy, omega)` — drive, strafe, turn.
+`MecanumDrive` implements the four-wheel holonomic kinematics that the actual
+chassis needs; `DifferentialDrive` is the two-motor model that matches what is
+currently wired, and simply discards `vy`. Behaviours are written against the
+three-axis interface either way, so nothing above changes when the four-motor
+board arrives — set `CAR_DRIVETRAIN=mecanum` and adjust the pins in one place.
+
+`test_layers.py` checks the kinematics and the safety rules without needing any
+hardware attached, which is the practical payoff of the split.
 
 ## Compatibility changes from the original
 
@@ -57,10 +113,10 @@ original tennis tracking), **Lane following**.
   anywhere.
 * **Kernel 6.12 renumbered the gpiochip devices** (RP1 is `gpiochip15`, not
   `gpiochip4`), and gpiozero's auto-detection guesses 0 or 4 and then silently
-  falls back to the broken RPi.GPIO backend. `gpio_setup.py` finds the chip by
+  falls back to the broken RPi.GPIO backend. `hal/gpio.py` finds the chip by
   its `pinctrl-rp1` label instead of hardcoding a number, so a future
   renumbering won't break it again. Import it before creating any device.
-* `ultrasound.py` uses gpiozero's built-in `DistanceSensor` (HC-SR04 support
+* `hal/sensors.py` uses gpiozero's built-in `DistanceSensor` (HC-SR04 support
   included) rather than hand-rolled trigger/echo timing.
 * TensorFlow Object Detection API → **YOLO26n via NCNN**. On this Pi 5,
   measured at 320px: NCNN **58 fps**, the same model under PyTorch 14 fps, the
@@ -94,17 +150,28 @@ dtoverlay=imx219
 Working and verified on real hardware: camera (streaming, detection), GPIO
 output, ultrasonic and infrared reads.
 
-Not yet wired: the motor driver board hasn't arrived, so the GPIO pin numbers
-in `move.py` are the original's placeholders. `move.py` also still models a
-**two-motor differential** drive; the actual chassis is **mecanum**, which
-needs four independent motors and a 3-DOF `(vx, vy, omega)` interface to use
-its sideways travel. Line-tracking sensors are one short of a usable set.
+Not yet wired: the motor driver board hasn't arrived, so the pin numbers in
+`hal/drivetrain.py` are upstream's placeholders and the default drivetrain is
+the two-motor differential model that matches what is actually connected. The
+mecanum implementation is written and unit-tested, waiting on the four-motor
+board. Line-tracking sensors are one short of a usable set — two can tell you
+which side you drifted to but not by how much, so a controller can only swing
+hard one way or the other.
 
-## Known issues inherited from upstream
+## Upstream code
 
-`main_object_detection.py` and `main_PID_test.py` import `detect`, which only
-exists in `old_version_backup/` — they were already broken upstream. Their
-functionality is covered by the `follow` mode.
+The original `main_*.py` demos, and the driver modules they used, are kept in
+`PythonCode/legacy/` for reference. They are not maintained and are superseded
+by the layered runtime: each one grabbed the camera and GPIO exclusively, so
+they cannot run alongside `main.py` anyway.
+
+Note that `main_object_detection.py` and `main_PID_test.py` import `detect`,
+which only ever existed in `old_version_backup/` — they were already broken
+upstream.
+
+---
+
+*Everything below is the original project's README, unchanged.*
 
 ## Platform
 Raspberry-Pi-3
