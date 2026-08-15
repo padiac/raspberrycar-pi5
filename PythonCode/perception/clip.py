@@ -41,6 +41,10 @@ MAX_SECONDS = 900
 #: not a lost video, it is a robot that will not boot.
 MIN_FREE_BYTES = 800 * 1024 * 1024
 
+#: Below this, what was produced is not a video. Players differ on whether
+#: they show a frozen frame or simply refuse, so it is deleted and said so
+#: rather than handed over as a file that will not open.
+MIN_FRAMES = 12
 #: How long to give ffmpeg to finish after its input closes. It has to write
 #: the index at the end, and a clip killed before that is unplayable.
 FINALISE_TIMEOUT_S = 8.0
@@ -53,8 +57,10 @@ def _ffmpeg_available():
 class ClipRecorder:
     """Records the stream to an MP4 on demand."""
 
-    def __init__(self, frames, directory):
+    def __init__(self, frames, directory, camera_off=None):
         self.frames = frames
+        #: Callable answering whether the camera is currently off.
+        self.camera_off = camera_off
         self.directory = directory
         os.makedirs(self.directory, exist_ok=True)
         self.available = _ffmpeg_available()
@@ -74,6 +80,11 @@ class ClipRecorder:
                 return False, "already recording"
             if not self.available:
                 return False, "ffmpeg is not installed"
+            if self.camera_off is not None and self.camera_off():
+                # ffmpeg with no input produces no file at all: the UI would say
+                # it recorded and the list would stay empty, with nothing
+                # anywhere saying why.
+                return False, "the camera is off"
             free = shutil.disk_usage(self.directory).free
             if free < MIN_FREE_BYTES:
                 return False, f"only {free // (1024 * 1024)}MB free, refusing to record"
@@ -107,6 +118,12 @@ class ClipRecorder:
             # the timestamps, or a dropped frame silently speeds the clip up.
             "-use_wallclock_as_timestamps", "1",
             "-f", "image2pipe", "-vcodec", "mjpeg", "-i", "-",
+            # A silent audio track. It costs a couple of kilobytes a minute and
+            # it is the difference between a file that opens everywhere and one
+            # that some players, phone galleries and messaging apps refuse
+            # outright -- a video-only MP4 is unusual enough that plenty of
+            # software treats it as broken.
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
             "-vf", f"scale={WIDTH}:-2",
             "-r", str(FPS),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", str(CRF),
@@ -115,6 +132,9 @@ class ClipRecorder:
             "-pix_fmt", "yuv420p",
             # Puts the index at the front, so it starts playing before it has
             # finished downloading.
+            "-c:a", "aac", "-b:a", "16k",
+            # The silence is infinite; stop when the pictures do.
+            "-shortest",
             "-movflags", "+faststart",
             "-fs", str(MAX_BYTES),
             "-t", str(MAX_SECONDS),
@@ -168,9 +188,18 @@ class ClipRecorder:
             except subprocess.TimeoutExpired:
                 process.kill()
 
+        written = self.frames_written
         with self._lock:
             self._collect()
-        return True, os.path.basename(path) if path else "stopped"
+
+        name = os.path.basename(path) if path else "stopped"
+        if path and written < MIN_FRAMES:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return False, f"only {written} frames, too short to be a video"
+        return True, name
 
     def _collect(self):
         """Clear the recording state and keep whatever ffmpeg complained about."""

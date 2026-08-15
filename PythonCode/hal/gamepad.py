@@ -52,10 +52,11 @@ RESCAN_S = 2.0
 NAMES = ("dualsense", "dualshock", "wireless controller", "gamepad",
          "controller", "xbox", "x-box", "joystick")
 
-#: With neither trigger held. Not 1.0, because the useful thing about a
-#: throttle is having somewhere to go in both directions from where you are.
-CRUISE = 0.6
-#: Fully on the crawl trigger.
+#: Fully on the brake trigger. With neither trigger touched the sticks get
+#: their full range, because anything else makes the pad quietly weaker
+#: than the buttons on the phone -- which it was: a 0.6 here multiplied by
+#: a speed limit of 0.15 came to 0.09, under what the motors need to turn
+#: at all, so the pad connected, reported fine, and did nothing.
 CRAWL = 0.2
 #: Each nudge of the D-pad, in degrees.
 PAN_STEP = 45.0
@@ -183,13 +184,11 @@ class Gamepad:
         vy = self._stick(ecodes.ABS_X) if self.holonomic else 0.0
         omega = self._stick(ecodes.ABS_RX)
 
-        # The triggers scale what the sticks asked for. The slider still sets
-        # the ceiling and these move you about underneath it, which is the
-        # useful way round: the pad cannot make the robot exceed what its
-        # driver allowed from the page.
-        boost = self._trigger(ecodes.ABS_RZ)
+        # L2 attenuates, and only attenuates: sticks alone give exactly what
+        # the on-screen pad gives, so picking up the controller never makes
+        # the car slower than putting it down.
         brake = self._trigger(ecodes.ABS_Z)
-        throttle = CRUISE + boost * (1.0 - CRUISE) - brake * (CRUISE - CRAWL)
+        throttle = 1.0 - brake * (1.0 - CRAWL)
         return Velocity(vx=vx, vy=vy, omega=omega).scaled(throttle)
 
     # -- buttons -----------------------------------------------------------
@@ -323,8 +322,16 @@ class Gamepad:
                 # the timeout to work it out.
                 if moving:
                     self._do("stop")
+                self._do("boost", 0.0)
                 moving = False
                 continue
+
+            # R2 lifts the limit rather than scaling the velocity. Scaling
+            # both here and at the governor is what made the pad weaker the
+            # harder it was configured; this way the slider is the resting
+            # speed and the trigger reaches past it, which is what a trigger
+            # is for. The person holding the pad can see the car.
+            self._do("boost", self._trigger(ecodes.ABS_RZ))
 
             velocity = self._velocity()
             if velocity.moving:

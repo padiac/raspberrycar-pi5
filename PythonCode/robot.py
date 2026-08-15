@@ -58,6 +58,10 @@ class Robot:
     #: and not there -- safety refuses what is dangerous, the governor sets
     #: how briskly the rest happens.
     speed_limit = 0.15
+    #: Momentary, from a controller's trigger: lifts the limit for as long
+    #: as it is held rather than changing what the slider says. Zero unless
+    #: something is actively holding it there, so it cannot be left on.
+    boost = 0.0
 
     def __init__(self):
         self.drivetrain = _optional("drivetrain", build_drivetrain)
@@ -92,6 +96,7 @@ class Robot:
             self.vision.frames,
             os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "clips"),
+            camera_off=lambda: not (self.camera and self.camera.enabled),
         ) if self.vision else None
         self.safety = SafetyLayer()
         self.recorder = PathRecorder()
@@ -110,6 +115,7 @@ class Robot:
                     "cycle_behavior": self.cycle_behavior,
                     "toggle_record": self.toggle_record,
                     "pan_by": self.pan_by,
+                    "boost": self.set_boost,
                     "pan_centre": self.pan_centre,
                 },
                 # A callable, not a value: the chassis can be swapped at
@@ -200,6 +206,7 @@ class Robot:
         return True, f"switched to {behavior.label}"
 
     def emergency_stop(self):
+        self.boost = 0.0
         self.select("idle")
         with self.lock:
             self.allowed = Velocity.STOP
@@ -275,6 +282,14 @@ class Robot:
 
     # -- things a driver can ask for, from a pad or from the page -----------
 
+    def set_boost(self, amount):
+        """Momentary speed, held by whoever is holding it."""
+        try:
+            self.boost = max(0.0, min(1.0, float(amount)))
+        except (TypeError, ValueError):
+            self.boost = 0.0
+        return self.boost
+
     def pan_by(self, degrees):
         """Nudge the sensor head. Returns where it ended up, or None."""
         if self.pan is None:
@@ -316,6 +331,12 @@ class Robot:
         head is not looking forward: a reading from off to one side is not a
         statement about what the car is driving into.
         """
+        # Only while actually driving into it. A distance on its own is not
+        # news: parked in a room, something is nearly always inside the slow
+        # zone, and a controller that buzzes continuously from the moment it
+        # connects is not warning anyone of anything.
+        if self.allowed.vx <= 0.0:
+            return 0.0
         distance = world.range_cm
         if distance is None or distance <= 0 or not world.range_forward:
             return 0.0
@@ -387,7 +408,8 @@ class Robot:
                     self.world = world
                     requested = self.behavior.update(self, world)
                     if self.behavior.governed:
-                        requested = requested.scaled(self.speed_limit)
+                        requested = requested.scaled(
+                            max(self.speed_limit, self.boost))
                     self.requested = requested
                     self._drive(self.safety.filter(requested, world))
                     self.behavior_error = None
@@ -421,6 +443,7 @@ class Robot:
             "requested": self.requested.as_dict(),
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
+            "speed_limit": self.speed_limit,
             "path": self.recorder.status(),
             "drivetrain": (
                 {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),
