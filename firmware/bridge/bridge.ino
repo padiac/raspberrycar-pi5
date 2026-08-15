@@ -24,6 +24,7 @@
 //                  $S,<angle>*CS             servo, 0 .. 180
 //                  $H*CS                     heartbeat, keeps the watchdog fed
 //                  $E*CS                     stop now
+//                  $W,<fl>,<fr>,<rl>,<rr>*CS raw wheels, calibration only
 //
 //   ESP32 -> Pi    $T,<range_cm>,<fl>,<fr>,<rl>,<rr>,<stopped>*CS
 //                  $!,<message>*CS           something went wrong
@@ -53,7 +54,9 @@
 
 // Flip an entry to -1 for a wheel that turns the wrong way. Keeping this here
 // means the Pi never has to know about miswired motors.
-const int DIR[4] = {1, 1, 1, 1};   // LF, RF, LB, RB
+// Measured with calibrate_wheels.py: the rear right motor's leads are
+// swapped, so it is corrected here rather than by rewiring it.
+const int DIR[4] = {1, 1, 1, -1};   // LF, RF, LB, RB
 
 const int PWM_HZ = 20000;
 const int PWM_BITS = 8;
@@ -196,6 +199,25 @@ bool parseLine(char *line) {
       stopNow();
       gLastCommand = millis();
       return true;
+
+    case 'W': {
+      // Raw per-wheel drive, bypassing the mixer. Only for calibration: the
+      // mixer can isolate a diagonal pair at best, so working out which way an
+      // individual motor turns needs a way to address it directly. DIR[] is
+      // still applied, so a wheel already marked reversed stays reversed.
+      float w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+      if (sscanf(body, "W,%f,%f,%f,%f", &w0, &w1, &w2, &w3) == 4) {
+        driveMotor(PWMA, AIN1, AIN2, constrain(w0, -1.0f, 1.0f) * DIR[0]);
+        driveMotor(PWMB, BIN1, BIN2, constrain(w1, -1.0f, 1.0f) * DIR[1]);
+        driveMotor(PWMC, CIN1, CIN2, constrain(w2, -1.0f, 1.0f) * DIR[2]);
+        driveMotor(PWMD, DIN1, DIN2, constrain(w3, -1.0f, 1.0f) * DIR[3]);
+        gWheel[0] = w0; gWheel[1] = w1; gWheel[2] = w2; gWheel[3] = w3;
+        gStopped = !(w0 || w1 || w2 || w3);
+        gVx = gVy = gW = 0;      // the mixer must not fight this next tick
+        gLastCommand = millis();
+      }
+      return true;
+    }
   }
   return false;
 }
@@ -250,7 +272,10 @@ void loop() {
   if (!gStopped && millis() - gLastCommand > COMMAND_TIMEOUT_MS) {
     stopNow();
     sendLine("!,command timeout, stopped");
-  } else {
+  } else if (gVx || gVy || gW) {
+    // Only re-apply the mixer when a velocity is what is being commanded. A
+    // raw $W sets the motors directly, and mixing zeroes over the top of it
+    // would cancel it out on the very next tick.
     applyVelocity(gVx, gVy, gW);
   }
 
