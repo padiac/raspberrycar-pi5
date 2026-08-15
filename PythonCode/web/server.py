@@ -10,7 +10,9 @@ import logging
 import os
 import subprocess
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import (
+    Flask, Response, jsonify, render_template, request, send_from_directory,
+)
 
 from hal import Velocity
 from robot import Robot
@@ -93,6 +95,10 @@ def api_pan():
             robot.pan.set_trim(data["trim"])
         if "angle" in data:
             robot.pan.look(data["angle"])
+        if "by" in data:
+            # Relative, for anything holding a direction rather than naming an
+            # angle -- the controller's d-pad, and arrow keys later.
+            robot.pan_by(data["by"])
     except (TypeError, ValueError):
         return jsonify(error="angle and trim must be numbers"), 400
     return jsonify(robot.pan.status())
@@ -141,6 +147,15 @@ def api_behavior():
     return jsonify(
         active=robot.behavior.name, message=message, status=robot.behavior.status()
     )
+
+
+@app.route("/api/behavior/next", methods=["POST"])
+def api_behavior_next():
+    """Step to the next usable behaviour, in the order the page lists them."""
+    ok, message = robot.cycle_behavior()
+    if not ok:
+        return jsonify(error=message), 409
+    return jsonify(active=robot.behavior.name, message=message)
 
 
 @app.route("/api/target", methods=["POST"])
@@ -298,6 +313,59 @@ def api_shutdown():
     except OSError as exc:
         return jsonify(error=f"could not shut down: {exc}"), 500
     return jsonify(shutting_down=True)
+
+
+@app.route("/api/clip", methods=["POST"])
+def api_clip():
+    """Start or stop recording the stream to a file."""
+    if robot.clips is None:
+        return jsonify(error="no camera"), 503
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+    if action == "start":
+        ok, message = robot.clips.start()
+    elif action == "stop":
+        ok, message = robot.clips.stop()
+    elif action is None:
+        ok, message = True, "ok"
+    else:
+        return jsonify(error=f"unknown action '{action}'"), 400
+    status = robot.clips.status()
+    if not ok:
+        return jsonify(error=message, clip=status), 409
+    return jsonify(message=message, clip=status, clips=robot.clips.clips())
+
+
+@app.route("/api/clips")
+def api_clips():
+    if robot.clips is None:
+        return jsonify(clips=[])
+    return jsonify(clips=robot.clips.clips(), clip=robot.clips.status())
+
+
+@app.route("/api/clips/<name>")
+def api_clip_download(name):
+    """Hand over a finished clip.
+
+    resolve() vets the name rather than this route cleaning it up: the only
+    names that mean anything are ones the recorder made, so anything else is
+    simply not a clip, and there is no path here to traverse out of.
+    """
+    if robot.clips is None or robot.clips.resolve(name) is None:
+        return jsonify(error="no such clip"), 404
+    return send_from_directory(
+        robot.clips.directory, name, as_attachment=True, mimetype="video/mp4"
+    )
+
+
+@app.route("/api/clips/<name>/delete", methods=["POST"])
+def api_clip_delete(name):
+    if robot.clips is None:
+        return jsonify(error="no camera"), 503
+    ok, message = robot.clips.delete(name)
+    if not ok:
+        return jsonify(error=message), 409
+    return jsonify(message=message, clips=robot.clips.clips())
 
 
 @app.route("/api/telemetry")

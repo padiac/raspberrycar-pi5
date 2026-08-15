@@ -15,6 +15,7 @@ absent, behaviours that need it cannot be selected, and the rest still runs --
 which matters while the motor board is still in the post.
 """
 
+import os
 import threading
 import time
 
@@ -27,6 +28,7 @@ from hal.gamepad import Gamepad
 from hal.sensors import (
     FloorArray, PanServo, ProximityArray, RangeFinder, SerialRangeFinder,
 )
+from perception.clip import ClipRecorder
 from perception.pipeline import VisionPipeline
 from perception.types import WorldState
 
@@ -84,6 +86,13 @@ class Robot:
         self.vision = (
             VisionPipeline(self.camera, self.detector) if self.camera else None
         )
+        # Clips live beside the code rather than in the home directory, so
+        # the card's contents are obvious to anyone who goes looking.
+        self.clips = ClipRecorder(
+            self.vision.frames,
+            os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "clips"),
+        ) if self.vision else None
         self.safety = SafetyLayer()
         self.recorder = PathRecorder()
 
@@ -93,9 +102,22 @@ class Robot:
         # bother.
         self.gamepad = _optional(
             "gamepad",
-            lambda: Gamepad(self.manual, self.emergency_stop,
-                            holonomic=bool(self.drivetrain
-                                           and self.drivetrain.dof >= 3)),
+            lambda: Gamepad(
+                self.manual,
+                actions={
+                    "stop": self.emergency_stop,
+                    "manual": lambda: self.select("manual"),
+                    "cycle_behavior": self.cycle_behavior,
+                    "toggle_record": self.toggle_record,
+                    "pan_by": self.pan_by,
+                    "pan_centre": self.pan_centre,
+                },
+                # A callable, not a value: the chassis can be swapped at
+                # runtime and a bool read here would be the answer to a
+                # question asked at start-up.
+                holonomic=lambda: bool(self.drivetrain
+                                       and self.drivetrain.dof >= 3),
+            ),
         )
 
         self.behaviors = build_behaviors(self.recorder)
@@ -251,6 +273,59 @@ class Robot:
         self.behaviors["manual"].command(velocity)
         return True, "ok"
 
+    # -- things a driver can ask for, from a pad or from the page -----------
+
+    def pan_by(self, degrees):
+        """Nudge the sensor head. Returns where it ended up, or None."""
+        if self.pan is None:
+            return None
+        return self.pan.look(self.pan.angle + float(degrees))
+
+    def pan_centre(self):
+        return self.pan.centre() if self.pan else None
+
+    def cycle_behavior(self):
+        """Next behaviour in the list, skipping any the hardware cannot do.
+
+        Deliberately in the order the page groups them -- control first, then
+        skills, then missions -- so pressing the button walks the same path the
+        eye does down the screen, rather than through dictionary order.
+        """
+        order = [b for b in self.behavior_list() if not b["missing"]]
+        if not order:
+            return False, "nothing available"
+        names = [b["name"] for b in order]
+        try:
+            index = names.index(self.behavior.name)
+        except ValueError:
+            index = -1
+        return self.select(names[(index + 1) % len(names)])
+
+    def toggle_record(self):
+        if self.recorder.recording:
+            self.recorder.disarm()
+        else:
+            self.recorder.arm()
+        return self.recorder.status()
+
+    def alert_level(self, world):
+        """How urgent the obstacle ahead is, 0 to 1, for the pad to buzz with.
+
+        Derived from the same numbers the safety layer clamps on, so the buzz
+        and the braking cannot tell different stories. Nothing to say when the
+        head is not looking forward: a reading from off to one side is not a
+        statement about what the car is driving into.
+        """
+        distance = world.range_cm
+        if distance is None or distance <= 0 or not world.range_forward:
+            return 0.0
+        if distance <= self.safety.stop_cm:
+            return 1.0
+        if distance >= self.safety.slow_cm:
+            return 0.0
+        span = self.safety.slow_cm - self.safety.stop_cm
+        return 0.8 * (self.safety.slow_cm - distance) / span
+
     # -- the loop -----------------------------------------------------------
 
     def _perceive(self, dt):
@@ -322,6 +397,8 @@ class Robot:
                     # or a playback would record itself.
                     if self.behavior.name != "replay":
                         self.recorder.observe(self.allowed, dt)
+                if self.gamepad is not None:
+                    self.gamepad.alert(self.alert_level(world))
             except Exception as exc:  # noqa: BLE001 - a bad behaviour must not run away
                 with self.lock:
                     self.behavior_error = f"{type(exc).__name__}: {exc}"
@@ -352,6 +429,7 @@ class Robot:
             ),
             "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
             "pan": self.pan.status() if self.pan else None,
+            "clip": self.clips.status() if self.clips else None,
             "gamepad": self.gamepad.status() if self.gamepad else None,
             "proximity": world.proximity.as_dict() if world.proximity else None,
             "floor": world.floor.as_dict() if world.floor else None,

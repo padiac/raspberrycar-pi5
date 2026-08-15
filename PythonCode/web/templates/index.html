@@ -191,11 +191,27 @@
   }
   #view { width: 100%; display: block; aspect-ratio: 16/9; object-fit: contain;
           background: var(--video-bg); }
+  @media (max-width: 700px) {
+    /* Stick the picture under the status bar so the pad below it can be
+       driven with the view still on screen. --barh is measured rather than
+       guessed: the bar wraps to two rows on a narrow phone. */
+    #stage { position: sticky; top: var(--barh, 56px); z-index: 20; }
+  }
   #stage.pickable #view { cursor: crosshair; }
 
   .hud { position: absolute; display: flex; gap: 6px; align-items: center; pointer-events: none; }
   .hud.tl { top: 11px; left: 11px; } .hud.tr { top: 11px; right: 11px; }
   .hud.bl { bottom: 11px; left: 11px; }
+  /* The HUD ignores pointer events so taps reach the video underneath and
+     pick a target; a button in it has to opt back in. */
+  #clipbtn {
+    pointer-events: auto; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+    padding: 5px 11px; border-radius: 999px; color: #fff;
+    background: color-mix(in srgb, #000 55%, transparent);
+    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.28);
+  }
+  #clipbtn.on { background: var(--bad); border-color: var(--bad); }
+  #clipbtn:disabled { opacity: .45; }
   .hud span {
     font-size: 10.5px; font-weight: 600; letter-spacing: .03em; padding: 4px 10px;
     border-radius: 999px; background: rgba(8,10,14,.62); backdrop-filter: blur(8px);
@@ -376,6 +392,21 @@
   button.toggle.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
   button.toggle.danger:disabled { opacity: .5; cursor: default; }
 
+  #cliplist { display: flex; flex-direction: column; gap: 7px; margin-top: 11px; }
+  #cliplist .none { color: var(--dim); font-size: 12.5px; }
+  .clip {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--sunken);
+  }
+  .clip b { font-size: 12.5px; font-weight: 600; }
+  .clip small { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .clip a, .clip button {
+    font-size: 11.5px; font-weight: 650; padding: 5px 11px; border-radius: 999px;
+    border: 1px solid var(--line-firm); color: var(--text); text-decoration: none;
+  }
+  .clip button { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+  .clip.busy { opacity: .6; }
+
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
          overflow: hidden; background: var(--surface); }
   .seg button {
@@ -436,35 +467,10 @@
 <div id="stage">
   <img id="view" src="/stream.mjpg" alt="camera stream">
   <div class="hud tl"><span class="rec" id="hudlive">LIVE</span><span id="hudfps">-- fps</span></div>
-  <div class="hud tr"><span id="huddet" hidden>0 objects</span></div>
+  <div class="hud tr"><span id="huddet" hidden>0 objects</span>
+    <button id="clipbtn" title="Record video">REC</button></div>
   <div class="hud bl"><span id="hudhint" hidden>tap an object to track</span></div>
   <div id="flash"><span></span></div>
-</div>
-
-<div class="panel">
-  <h2>What it is doing</h2>
-  <div id="behaviors"></div>
-  <div id="bstatus"></div>
-  <div id="safety">safety layer: idle</div>
-  <pre id="tree"></pre>
-</div>
-
-<div class="panel">
-  <h2>Seen right now <em>tap to track</em></h2>
-  <div id="objects"><span class="none">detection off</span></div>
-  <div class="row" style="margin-top:15px">
-    <button class="toggle on" id="cambtn">Camera</button>
-    <button class="toggle" id="detbtn">Detection</button>
-    <button class="toggle on" id="safebtn">Safety</button>
-  </div>
-  <div class="row">
-    <label>confidence</label><span class="val" id="confval">0.40</span>
-    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
-  </div>
-  <div class="row">
-    <input type="text" id="target" placeholder="or type a target, e.g. bottle">
-    <button class="toggle" id="settarget">Track</button>
-  </div>
 </div>
 
 <div class="panel">
@@ -523,6 +529,46 @@
   </div>
   <p class="hint" id="holohint"></p>
   <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · hold two keys for a diagonal · <kbd>space</kbd> stops.</p>
+</div>
+
+
+<div class="panel">
+  <h2>What it is doing</h2>
+  <div id="behaviors"></div>
+  <div id="bstatus"></div>
+  <div id="safety">safety layer: idle</div>
+  <pre id="tree"></pre>
+</div>
+
+<div class="panel">
+  <h2>Seen right now <em>tap to track</em></h2>
+  <div id="objects"><span class="none">detection off</span></div>
+  <div class="row" style="margin-top:15px">
+    <button class="toggle on" id="cambtn">Camera</button>
+    <button class="toggle" id="detbtn">Detection</button>
+    <button class="toggle on" id="safebtn">Safety</button>
+  </div>
+  <div class="row">
+    <label>confidence</label><span class="val" id="confval">0.40</span>
+    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
+  </div>
+  <div class="row">
+    <input type="text" id="target" placeholder="or type a target, e.g. bottle">
+    <button class="toggle" id="settarget">Track</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recordings <em id="clipfree"></em></h2>
+  <div class="row">
+    <button class="toggle" id="clipbtn2">● Record video</button>
+    <span class="val" id="clipinfo" style="color:var(--muted);font-weight:500">not recording</span>
+  </div>
+  <div id="cliplist"></div>
+  <p class="hint">H.264 in an MP4, 640 wide at 15fps -- perhaps a twentieth the
+    size of the stream you are watching, and it plays anywhere. It records what
+    is on screen, boxes and all. Recording stops on its own at 150MB or 15
+    minutes, so a forgotten one cannot fill the card.</p>
 </div>
 
 <div class="panel">
@@ -1104,6 +1150,7 @@ async function telemetry() {
     renderPath(d.path);
     renderPan(d.pan);
     renderGamepad(d.gamepad);
+    if (d.clip) { renderClipState(d.clip); if (d.clip.recording) clipTick(); }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length
@@ -1126,6 +1173,100 @@ $('poweroff').onclick = async () => {
     : ((r && r.error) || 'could not reach the robot');
   if (!(r && r.shutting_down)) $('poweroff').disabled = false;
 };
+
+// ---- recording video ----------------------------------------------------
+let clipRecording = false;
+// While recording, the list is refreshed occasionally so the growing file's
+// size is visible. Not every telemetry poll: that is twice a second, and
+// listing a directory is not free.
+let clipTicked = 0;
+function clipTick() {
+  const now = Date.now();
+  if (now - clipTicked < 3000) return;
+  clipTicked = now;
+  fetch('/api/clips').then(r => r.json()).then(d => renderClips(d.clips || [])).catch(() => {});
+}
+
+async function clipAction(action) {
+  const r = await post('/api/clip', {action});
+  if (r && r.error) flash(r.error);
+  if (r && r.clips) renderClips(r.clips);
+  if (r && r.clip) renderClipState(r.clip);
+}
+const toggleClip = () => clipAction(clipRecording ? 'stop' : 'start');
+$('clipbtn').onclick = toggleClip;
+$('clipbtn2').onclick = toggleClip;
+
+function renderClipState(c) {
+  if (!c) return;
+  clipRecording = !!c.recording;
+  $('clipbtn').classList.toggle('on', clipRecording);
+  $('clipbtn').textContent = clipRecording ? 'REC \u25cf' : 'REC';
+  $('clipbtn2').textContent = clipRecording ? '\u25a0 Stop recording' : '\u25cf Record video';
+  $('clipbtn2').classList.toggle('on', clipRecording);
+  $('clipfree').textContent = c.free_mb == null ? '' : (c.free_mb / 1024).toFixed(1) + ' GB free';
+  const disabled = !c.available;
+  $('clipbtn').disabled = $('clipbtn2').disabled = disabled;
+  $('clipinfo').textContent = !c.available ? 'ffmpeg not installed'
+    : clipRecording ? c.name + ' \u2014 ' + c.seconds.toFixed(0) + 's, ' + c.frames + ' frames'
+    : (c.error || 'not recording');
+}
+
+// Rebuilt only when the set of clips changes, so the buttons are not replaced
+// out from under a finger mid-tap.
+let clipKey = '';
+function renderClips(clips) {
+  const key = clips.map(c => c.name + c.bytes + c.recording).join('|');
+  if (key === clipKey) return;
+  clipKey = key;
+  const list = $('cliplist');
+  list.innerHTML = '';
+  if (!clips.length) {
+    list.innerHTML = '<span class="none">nothing recorded yet</span>';
+    return;
+  }
+  clips.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'clip' + (c.recording ? ' busy' : '');
+    row.innerHTML = '<b>' + esc(c.name.replace('.mp4', '')) + '</b>'
+      + '<small>' + c.mb + ' MB \u00b7 ' + esc(c.when) + '</small>';
+    if (c.recording) {
+      const tag = document.createElement('small');
+      tag.textContent = 'recording\u2026';
+      row.appendChild(tag);
+    } else {
+      const get = document.createElement('a');
+      get.href = '/api/clips/' + encodeURIComponent(c.name);
+      get.setAttribute('download', c.name);
+      get.textContent = 'Download';
+      row.appendChild(get);
+      const del = document.createElement('button');
+      del.textContent = 'Delete';
+      del.onclick = async () => {
+        if (!confirm('Delete ' + c.name + '?')) return;
+        const r = await post('/api/clips/' + encodeURIComponent(c.name) + '/delete');
+        if (r && r.error) flash(r.error);
+        if (r && r.clips) renderClips(r.clips);
+      };
+      row.appendChild(del);
+    }
+    list.appendChild(row);
+  });
+}
+
+fetch('/api/clips').then(r => r.json()).then(d => {
+  renderClips(d.clips || []);
+  renderClipState(d.clip);
+}).catch(() => {});
+
+// The sticky picture has to sit below the status bar, and the bar wraps to two
+// rows when the screen is narrow, so its height is measured rather than assumed.
+function measureBar() {
+  document.documentElement.style.setProperty('--barh', $('bar').offsetHeight + 'px');
+}
+measureBar();
+addEventListener('resize', measureBar);
+addEventListener('orientationchange', () => setTimeout(measureBar, 300));
 
 setInterval(telemetry, 500);
 </script>
