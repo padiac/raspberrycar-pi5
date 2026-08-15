@@ -208,10 +208,75 @@ class MecanumDrive(Drivetrain):
             motor.value = clamp(speed)
 
 
-#: Which chassis to build. The car is mecanum, but until the four-motor board
-#: is wired the two-motor differential model is what actually matches reality,
-#: so that stays the default. Override with CAR_DRIVETRAIN=mecanum.
-DRIVETRAINS = {"differential": DifferentialDrive, "mecanum": MecanumDrive}
+class SerialDrivetrain(Drivetrain):
+    """A mecanum chassis driven by an ESP32 over the serial link.
+
+    This is the whole point of putting a `Drivetrain` interface in front of the
+    motors. Nothing above this file changes: behaviours, the safety layer, the
+    behaviour tree and the web UI all still speak `Velocity(vx, vy, omega)` and
+    have no idea whether that ends up as a GPIO edge or a line of text on a
+    wire.
+
+    The mixing happens on the ESP32, which owns the wiring and knows which
+    wheels are reversed. It reports the resulting wheel speeds back, so the
+    diagram in the UI shows what the motors are really doing rather than what
+    this side assumes.
+    """
+
+    dof = 3
+    label = "mecanum via ESP32"
+    wheel_names = ("front_left", "front_right", "rear_left", "rear_right")
+
+    def __init__(self, link=None):
+        super().__init__()
+        if link is None:
+            from .link import SerialLink
+
+            link = SerialLink()
+        self.link = link
+
+    def wheel_speeds(self, v):
+        # Same kinematics as MecanumDrive, kept here only so this side can
+        # predict the wheels before the board has reported back.
+        return [
+            v.vx - v.vy - v.omega,
+            v.vx + v.vy + v.omega,
+            v.vx + v.vy - v.omega,
+            v.vx - v.vy + v.omega,
+        ]
+
+    def _drive(self, speeds):
+        velocity = self.last
+        self.link.send_velocity(velocity.vx, velocity.vy, velocity.omega)
+
+    def apply(self, velocity):
+        super().apply(velocity)
+        # Prefer the board's own report over our prediction.
+        reported = self.link.telemetry.wheels
+        if self.link.telemetry.fresh and any(reported):
+            self.speeds = tuple(round(w, 3) for w in reported)
+        return self.speeds
+
+    def stop(self):
+        super().stop()
+        self.link.stop()
+
+    def close(self):
+        self.link.close()
+
+    def status(self):
+        return {**super().status(), "link": self.link.status()}
+
+
+#: Which chassis to build. `serial` is the real car: an ESP32 drives four
+#: mecanum wheels and this Pi tells it where to go. The two direct-GPIO models
+#: remain for a Pi wired straight to a motor driver, and for the unit tests,
+#: which exercise the kinematics without any hardware at all.
+DRIVETRAINS = {
+    "differential": DifferentialDrive,
+    "mecanum": MecanumDrive,
+    "serial": SerialDrivetrain,
+}
 
 
 def build_drivetrain(kind=None):

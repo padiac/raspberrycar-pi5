@@ -128,14 +128,58 @@ the other exists — the composition is entirely in the tree.
 The web page draws the live tree with the running path highlighted, so you can
 watch which branch is active while it drives.
 
-### Mecanum
+### Mecanum, and the ESP32
 
-`hal/drivetrain.py` speaks `Velocity(vx, vy, omega)` — drive, strafe, turn.
-`MecanumDrive` implements the four-wheel holonomic kinematics that the actual
-chassis needs; `DifferentialDrive` is the two-motor model that matches what is
-currently wired, and simply discards `vy`. Behaviours are written against the
-three-axis interface either way, so nothing above changes when the four-motor
-board arrives — set `CAR_DRIVETRAIN=mecanum` and adjust the pins in one place.
+`hal/drivetrain.py` speaks `Velocity(vx, vy, omega)` — drive, strafe, turn — and
+`Drivetrain` subclasses decide what that means in hardware. The real car uses
+`SerialDrivetrain`: an **ESP32 drives four mecanum wheels** and the Pi tells it
+where to go over USB serial. `MecanumDrive` and `DifferentialDrive` drive GPIO
+directly and remain for a Pi wired straight to a motor driver, and for the unit
+tests, which exercise the kinematics with no hardware at all.
+
+The split is by what each side is good at. Linux cannot hold microsecond timing
+— a scheduling hiccup ruins an ultrasonic echo measurement — and an ESP32
+cannot run a neural network. So the ESP32 has the reflexes (motor PWM, echo
+timing, servo, a hard stop when the link goes quiet) and the Pi does the
+thinking (camera, detection, behaviours, the web UI).
+
+Nothing above `hal/` knows the difference. Behaviours, the safety layer, the
+behaviour tree and the web page still speak `Velocity` and cannot tell whether
+it becomes a GPIO edge or a line of text on a wire.
+
+```
+CAR_DRIVETRAIN=serial python3 main.py     # the real car
+CAR_DRIVETRAIN=mecanum python3 main.py    # Pi wired straight to motors
+```
+
+The firmware is in `firmware/bridge/`. `arduino-cli` is installed on the Pi, so
+it can be rebuilt and reflashed in place without unmounting anything:
+
+```
+arduino-cli compile --fqbn esp32:esp32:esp32 firmware/bridge
+arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/bridge
+```
+
+### The wire protocol
+
+Text lines with an XOR checksum, deliberately readable rather than a packed
+struct: at 20Hz this is a few hundred bytes a second, so efficiency is
+irrelevant, while being able to open a serial monitor and *read* the
+conversation is worth a lot when something misbehaves. Struct packing also
+invites alignment and endianness bugs between a 32-bit MCU and 64-bit ARM.
+
+```
+Pi  -> ESP32   $V,0.500,0.000,-0.300*3A     drive
+               $S,90*1C                     servo
+               $H*2F                        heartbeat
+ESP32 -> Pi    $T,23.4,1.000,0.333,0.333,1.000,0*5B
+                  range  ── wheel speeds ──  stopped
+```
+
+The firmware stops the wheels if no **velocity** arrives for 500ms. Heartbeats
+deliberately do not count: the ping runs on its own thread on the Pi, so if the
+control loop hung while that thread lived on, letting it feed the watchdog
+would keep the car driving under a robot that had stopped thinking.
 
 ### Tests
 
@@ -143,13 +187,17 @@ board arrives — set `CAR_DRIVETRAIN=mecanum` and adjust the pins in one place.
 asserting the safety layer never increases or reverses any axis.
 `test_tree.py` checks the tree semantics — status propagation, decorator
 behaviour, reset, and that `Fallback` really does re-decide each tick.
+`test_link.py` checks the wire protocol against a stand-in port: framing,
+checksums, that a corrupt line is dropped rather than obeyed, and that a
+"no echo" reading surfaces as `None` rather than a negative distance the safety
+layer would read as an obstacle 1cm away.
 
-Neither needs any hardware attached, which is the practical payoff of the
+None of them needs any hardware attached, which is the practical payoff of the
 split:
 
 ```
 cd PythonCode
-python3 test_layers.py && python3 test_tree.py
+python3 test_layers.py && python3 test_tree.py && python3 test_link.py
 ```
 
 ## Compatibility changes from the original
@@ -195,18 +243,38 @@ camera_auto_detect=0
 dtoverlay=imx219
 ```
 
-## Hardware status
+## The car
 
-Working and verified on real hardware: camera (streaming, detection), GPIO
-output, ultrasonic and infrared reads.
+```
+Raspberry Pi 5          camera, detection, behaviours, web UI
+      │ USB serial
+ESP32 DevKit            motor PWM, ultrasonic timing, servo, safety stop
+      │
+2x TB6612FNG  ->  4 mecanum wheels
+HC-SR04 ultrasonic on a servo mount
+7.4V battery -> buck -> 5V
+```
 
-Not yet wired: the motor driver board hasn't arrived, so the pin numbers in
-`hal/drivetrain.py` are upstream's placeholders and the default drivetrain is
-the two-motor differential model that matches what is actually connected. The
-mecanum implementation is written and unit-tested, waiting on the four-motor
-board. Line-tracking sensors are one short of a usable set — two can tell you
-which side you drifted to but not by how much, so a controller can only swing
-hard one way or the other.
+Verified end to end on the real car: driving in all three axes through the web
+page, the wheel speeds the ESP32 reports matching the kinematics, ultrasonic
+readings travelling Pi-ward over the link, and the safety layer refusing a
+full-speed forward command with a wall 9cm away.
+
+Known rough edges:
+
+* **Powering the Pi from the same buck as the motors browns it out.** Caught in
+  the kernel log — `Undervoltage detected!` twice, then the boot ends mid-line,
+  which is a hard power loss rather than a shutdown. A Pi 5 wants 5V/5A, and
+  motor inrush drags the shared rail down at exactly the wrong moment. A
+  `powerlog` service now records the supply voltage and throttle flags to the
+  journal every second, because `vcgencmd get_throttled` is cleared by a reboot
+  — a brownout otherwise erases its own evidence.
+* The infrared line-tracking sensors are not wired to the ESP32 yet, so
+  `proximity` and `floor` report unavailable. Two sensors would be one short of
+  useful anyway: they can say which side you drifted to but not by how much, so
+  a controller could only swing hard one way or the other.
+* `DIR[]` in the firmware is all `+1`; flip an entry for any wheel that turns
+  the wrong way once the chassis is finally assembled.
 
 ## Upstream code
 

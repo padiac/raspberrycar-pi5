@@ -67,6 +67,31 @@ class RangeFinder:
         return self.average_cm
 
 
+class SerialRangeFinder:
+    """Distance as reported by the ESP32.
+
+    The measurement itself happens over there because it is a microsecond
+    pulse-width reading, and Linux cannot be trusted to time one: a scheduling
+    hiccup of a millisecond turns into 17cm of error. All this does is read the
+    number off the link.
+    """
+
+    def __init__(self, link):
+        self.link = link
+        self.average_cm = 0.0
+
+    def read_cm(self):
+        value = self.link.telemetry.range_cm
+        return -1.0 if value is None else value
+
+    def read_smoothed_cm(self):
+        current = self.read_cm()
+        if current < 0:
+            return self.average_cm      # keep the last good value on a miss
+        self.average_cm = 0.8 * current + 0.2 * self.average_cm
+        return self.average_cm
+
+
 class ProximityArray:
     """The two side-facing infrared obstacle sensors."""
 

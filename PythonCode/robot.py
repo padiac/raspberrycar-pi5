@@ -23,7 +23,7 @@ from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
-from hal.sensors import FloorArray, ProximityArray, RangeFinder
+from hal.sensors import FloorArray, ProximityArray, RangeFinder, SerialRangeFinder
 from perception.pipeline import VisionPipeline
 from perception.types import WorldState
 
@@ -44,9 +44,21 @@ def _optional(name, factory):
 class Robot:
     def __init__(self):
         self.drivetrain = _optional("drivetrain", build_drivetrain)
-        self.rangefinder = _optional("rangefinder", RangeFinder)
-        self.proximity = _optional("proximity", ProximityArray)
-        self.floor = _optional("floor sensors", FloorArray)
+
+        # When an ESP32 is driving, the sensors wired to it come back over the
+        # same link rather than off this board's pins. Everything above still
+        # just sees a WorldState and cannot tell the difference.
+        self.link = getattr(self.drivetrain, "link", None)
+        if self.link is not None:
+            self.rangefinder = _optional(
+                "rangefinder (via ESP32)", lambda: SerialRangeFinder(self.link)
+            )
+            self.proximity = None
+            self.floor = None
+        else:
+            self.rangefinder = _optional("rangefinder", RangeFinder)
+            self.proximity = _optional("proximity", ProximityArray)
+            self.floor = _optional("floor sensors", FloorArray)
         self.detector = _optional(
             "detector", lambda: __import__("perception.detector", fromlist=["Detector"]).Detector()
         )

@@ -6,6 +6,7 @@ the same surface usable by the browser, by curl, and later by an LLM issuing
 tool calls.
 """
 
+import logging
 import os
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -14,6 +15,11 @@ from hal import Velocity
 from robot import Robot
 
 HTTP_PORT = int(os.environ.get("CAR_PORT", "8000"))
+
+# The page polls telemetry twice a second, so per-request access logs bury
+# anything worth reading -- under systemd the journal becomes unusable for
+# finding an actual fault. Warnings and errors still come through.
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 # Jinja caches compiled templates, and with debug off it never re-reads them --
