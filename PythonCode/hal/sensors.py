@@ -104,6 +104,14 @@ class SerialRangeFinder:
         value = self.link.telemetry.range_cm
         return None if value is None else value
 
+    def forget(self):
+        """Drop the running average, because it is about somewhere else now.
+
+        The head can move. An average that survives a swing is a blend of two
+        directions, and the blend looks like a perfectly ordinary distance.
+        """
+        self.average_cm = None
+
     def read_smoothed_cm(self):
         current = self.read_cm()
         if current is None:
@@ -120,6 +128,85 @@ class SerialRangeFinder:
         else:
             self.average_cm = 0.8 * current + 0.2 * self.average_cm
         return self.average_cm
+
+
+#: Servo degrees nominally straight ahead. The trim corrects the rest: a servo
+#: horn only fits on its spline every few degrees, so the angle that actually
+#: points down the middle of the car is a property of how it was assembled and
+#: cannot be assumed.
+CENTRE_DEG = 90
+#: How far either side of forward the head may look. Beyond a right angle
+#: the head is looking backwards down the side of the car, which tells you
+#: nothing about where it is going.
+PAN_LIMIT = 90
+#: A hobby servo has no feedback, so the only honest way to know it has
+#: arrived is to wait. These are generous; a wrong reading is worse than a
+#: slow one.
+SETTLE_PER_DEG = 0.004
+SETTLE_MIN_S = 0.15
+#: Within this of forward, a reading counts as a forward clearance.
+FORWARD_TOLERANCE_DEG = 12
+
+
+class PanServo:
+    """Where the ultrasonic is pointing.
+
+    The car has one distance sensor and it is on a servo, so "how far is the
+    obstacle" is only half a question -- the other half is which way the head
+    was facing at the time. Nothing used to ask: the firmware centred the servo
+    once at boot and no one on this side ever touched it again, so the reading
+    was whatever direction the head happened to have been left in. A steady
+    3.3m while the car drove into a wall is exactly what that looks like.
+
+    Angles here are relative to straight ahead, positive to the right, which is
+    the same sense as vy and omega. The servo's own numbering is an
+    implementation detail and stays inside this class.
+    """
+
+    #: Flip to -1 if the head turns the opposite way to the commanded sign.
+    #: Which way a servo runs depends on how the linkage was put together, and
+    #: this project has already been caught twice by an assumed sign.
+    DIRECTION = 1
+
+    def __init__(self, link, trim=0.0):
+        self.link = link
+        self.trim = float(trim)
+        self.angle = 0.0
+        self._arrived = 0.0
+        self.look(0)
+
+    def look(self, angle):
+        """Aim the head. Returns the angle actually taken up."""
+        angle = max(-PAN_LIMIT, min(PAN_LIMIT, float(angle)))
+        travel = abs(angle - self.angle)
+        self.angle = angle
+        self._arrived = time.monotonic() + max(SETTLE_MIN_S, travel * SETTLE_PER_DEG)
+        self.link.send_servo(CENTRE_DEG + self.trim + self.DIRECTION * angle)
+        return self.angle
+
+    def centre(self):
+        return self.look(0)
+
+    def set_trim(self, trim):
+        self.trim = max(-40.0, min(40.0, float(trim)))
+        return self.look(self.angle)      # re-aim so the change is visible
+
+    @property
+    def settled(self):
+        """False while the head is still swinging, so readings are not trusted."""
+        return time.monotonic() >= self._arrived
+
+    @property
+    def looking_forward(self):
+        return self.settled and abs(self.angle) <= FORWARD_TOLERANCE_DEG
+
+    def status(self):
+        return {
+            "angle": round(self.angle, 1),
+            "trim": round(self.trim, 1),
+            "settled": self.settled,
+            "forward": self.looking_forward,
+        }
 
 
 class ProximityArray:

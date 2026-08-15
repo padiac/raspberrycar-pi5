@@ -53,6 +53,10 @@ class WorldState:
     range_cm: float = None              # ultrasonic; None unknown, <0 clear
     range_expected: bool = False        # a rangefinder is fitted, so None
                                         # means it went quiet, not absent
+    range_angle: float = None           # where the head was looking, degrees
+                                        # off forward, positive right
+    range_forward: bool = True          # was that near enough to straight
+                                        # ahead to count as clearance?
     proximity: Proximity = None         # side infrared
     floor: Floor = None                 # downward line sensors
 

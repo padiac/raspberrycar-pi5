@@ -8,6 +8,7 @@ tool calls.
 
 import logging
 import os
+import subprocess
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -79,6 +80,22 @@ def api_drive():
     if not ok:
         return jsonify(error=message), 409
     return jsonify(requested=velocity.as_dict(), behavior=robot.behavior.name)
+
+
+@app.route("/api/pan", methods=["POST"])
+def api_pan():
+    """Aim the head the ultrasonic is on, or trim where its forward is."""
+    if robot.pan is None:
+        return jsonify(error="no pan servo"), 503
+    data = request.get_json(silent=True) or {}
+    try:
+        if "trim" in data:
+            robot.pan.set_trim(data["trim"])
+        if "angle" in data:
+            robot.pan.look(data["angle"])
+    except (TypeError, ValueError):
+        return jsonify(error="angle and trim must be numbers"), 400
+    return jsonify(robot.pan.status())
 
 
 @app.route("/api/speed", methods=["POST"])
@@ -252,6 +269,35 @@ def api_detect():
 @app.route("/api/classes")
 def api_classes():
     return jsonify(classes=robot.detector.class_names if robot.detector else [])
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def api_shutdown():
+    """Power the Pi down cleanly.
+
+    Yanking the plug on a running Linux box risks the SD card, and the card is
+    the whole robot. There is no console on a car, so the only place this
+    button can live is the page that is already open.
+
+    Deliberately awkward to trigger: it wants an explicit token in the body, so
+    a stray POST -- a retried request, something crawling the API, a fat finger
+    on a browser's replay button -- cannot switch the car off. The token is not
+    a password. Anyone who can reach this port can already drive the car; the
+    point is only that it takes an intent to say it.
+    """
+    data = request.get_json(silent=True) or {}
+    if data.get("confirm") != "shutdown":
+        return jsonify(error='send {"confirm": "shutdown"} to power off'), 400
+
+    # Stop the wheels before the process dies. systemd would get there too, via
+    # KillSignal=SIGINT, but not until it starts tearing the unit down, and a
+    # car that keeps rolling through its own shutdown is a bad look.
+    robot.emergency_stop()
+    try:
+        subprocess.Popen(["sudo", "-n", "/sbin/shutdown", "-h", "now"])
+    except OSError as exc:
+        return jsonify(error=f"could not shut down: {exc}"), 500
+    return jsonify(shutting_down=True)
 
 
 @app.route("/api/telemetry")

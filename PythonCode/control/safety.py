@@ -80,7 +80,24 @@ class SafetyLayer:
         # Only ever limits *forward* motion: reversing away from a wall in
         # front must stay possible, or the car can trap itself.
         distance = world.range_cm
-        if vx > 0 and distance is not None and distance > 0:
+        # A distance is only a *forward* clearance if the head was pointing
+        # forward when it was taken. The sensor sits on a servo, so that is a
+        # question with an answer rather than something to assume.
+        forward_reading = distance is not None and world.range_forward
+
+        if vx > 0 and world.range_expected and not forward_reading:
+            # Three ways to have no forward reading and one correct response.
+            # The board has gone quiet, or the head is aimed elsewhere, or it
+            # is still swinging back. None of them is open road, and all three
+            # used to read as one: a miss came back as the last good value, or
+            # as zero before there had been a good one, and zero fails the
+            # `> 0` test below, so the whole check was skipped.
+            reasons.append(
+                "sensor not looking ahead, forward blocked" if distance is not None
+                else "no range reading, forward blocked"
+            )
+            vx = 0.0
+        elif vx > 0 and forward_reading and distance > 0:
             if distance < self.stop_cm:
                 reasons.append(f"obstacle {distance:.0f}cm ahead, forward blocked")
                 vx = 0.0
@@ -90,17 +107,6 @@ class SafetyLayer:
                 if vx > ceiling:
                     reasons.append(f"obstacle {distance:.0f}cm ahead, forward limited")
                     vx = ceiling
-        elif vx > 0 and world.range_expected and distance is None:
-            # A fitted sensor that has stopped answering is a fault, and a fault
-            # is not open road. The two used to be indistinguishable: a missed
-            # reading came back as the last good value, or as zero before there
-            # had ever been a good one, and zero fails the `> 0` test above, so
-            # the limiter quietly did nothing.
-            #
-            # A negative reading is not this. That is the pulse timing out with
-            # nothing within about 4m, which is a real answer meaning clear.
-            reasons.append("no range reading, forward blocked")
-            vx = 0.0
 
         # -- side clearance, from the infrared pair -------------------------
         # These only see to the sides, so they gate strafing rather than

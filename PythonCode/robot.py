@@ -23,7 +23,9 @@ from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
-from hal.sensors import FloorArray, ProximityArray, RangeFinder, SerialRangeFinder
+from hal.sensors import (
+    FloorArray, PanServo, ProximityArray, RangeFinder, SerialRangeFinder,
+)
 from perception.pipeline import VisionPipeline
 from perception.types import WorldState
 
@@ -65,9 +67,11 @@ class Robot:
             self.rangefinder = _optional(
                 "rangefinder (via ESP32)", lambda: SerialRangeFinder(self.link)
             )
+            self.pan = _optional("pan servo", lambda: PanServo(self.link))
             self.proximity = None
             self.floor = None
         else:
+            self.pan = None
             self.rangefinder = _optional("rangefinder", RangeFinder)
             self.proximity = _optional("proximity", ProximityArray)
             self.floor = _optional("floor sensors", FloorArray)
@@ -104,6 +108,7 @@ class Robot:
             "camera": self.camera is not None and self.camera.enabled,
             "detector": self.detector is not None,
             "rangefinder": self.rangefinder is not None,
+            "pan": self.pan is not None,
             "proximity": self.proximity is not None,
             "floor": self.floor is not None,
         }
@@ -240,6 +245,11 @@ class Robot:
             self.vision.snapshot() if self.vision else (None, (0, 0), [])
         )
 
+        # A reading taken mid-swing describes where the head used to be, so
+        # throw the average away rather than carrying it across.
+        if self.pan is not None and self.rangefinder is not None and not self.pan.settled:
+            self.rangefinder.forget()
+
         range_cm = None
         if self.rangefinder is not None:
             try:
@@ -263,6 +273,11 @@ class Robot:
             dt=dt, frame=frame, frame_size=size, detections=detections,
             range_cm=range_cm, proximity=proximity, floor=floor,
             range_expected=self.rangefinder is not None,
+            # A distance without a direction is half a measurement. With no
+            # servo fitted the head cannot be anywhere but forward, so that
+            # is the honest default rather than a convenient one.
+            range_angle=self.pan.angle if self.pan else None,
+            range_forward=self.pan.looking_forward if self.pan else True,
         )
 
     def _drive(self, velocity):
@@ -323,6 +338,7 @@ class Robot:
                 if self.drivetrain else None
             ),
             "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
+            "pan": self.pan.status() if self.pan else None,
             "proximity": world.proximity.as_dict() if world.proximity else None,
             "floor": world.floor.as_dict() if world.floor else None,
             "stream_fps": round(self.vision.stream_fps, 1) if self.vision else 0.0,

@@ -372,6 +372,10 @@
     #dirpad button.k.mini { font-size: 12.5px; }
   }
 
+  button.toggle.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+  button.toggle.danger:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+  button.toggle.danger:disabled { opacity: .5; cursor: default; }
+
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
          overflow: hidden; background: var(--surface); }
   .seg button {
@@ -496,6 +500,21 @@
     <label>chassis</label>
     <span id="dtpick"></span>
   </div>
+  <div class="row" id="panrow" hidden>
+    <label>sensor aim</label><span class="val" id="panval">forward</span>
+    <input type="range" id="pan" min="-90" max="90" value="0" step="5">
+    <button class="toggle" id="pancentre">centre</button>
+  </div>
+  <div class="row" id="trimrow" hidden>
+    <label>aim trim</label><span class="val" id="trimval">0&deg;</span>
+    <input type="range" id="trim" min="-30" max="30" value="0" step="1">
+  </div>
+  <p class="hint" id="panhint" hidden>The ultrasonic rides on a servo. A horn
+    only fits its spline every few degrees, so the trim is what makes the
+    middle of the slider actually point down the middle of the car -- aim at
+    something straight ahead and adjust until the range reading is at its
+    smallest. Driving forward is refused while the head is turned away, since
+    there is nothing watching where the car is going.</p>
   <div class="row" style="margin-top:14px">
     <button class="toggle" id="recbtn">● Record</button>
     <button class="toggle" id="runbtn">▶ Replay</button>
@@ -510,6 +529,7 @@
   <h2>Diagnostics</h2>
   <div class="tel">
     <div><span>Range</span><b id="range">--</b></div>
+    <div><span>Sensor aim</span><b id="panaim">--</b></div>
     <div><span>vx fwd</span><b id="vx">0.00</b></div>
     <div><span>vy strafe</span><b id="vy">0.00</b></div>
     <div><span>ω turn</span><b id="om">0.00</b></div>
@@ -518,6 +538,10 @@
     <div><span>Stream</span><b id="sfps">--</b></div>
     <div><span>Detect</span><b id="dfps">--</b></div>
     <div><span>Gamepad</span><b id="gp">none</b></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button class="toggle danger" id="poweroff">⏻ Shut down the Pi</button>
+    <span class="val" id="powerinfo" style="color:var(--muted);font-weight:500">pulling the plug on a running Linux risks the SD card</span>
   </div>
   <canvas id="spark" width="800" height="92" title="range over the last 30 seconds"></canvas>
   <p class="hint" id="hw"></p>
@@ -536,6 +560,33 @@ speed.oninput = () => $('speedval').textContent = speed.value + '%';
 // The limit lives on the robot, so it governs patrol and follow as well as
 // the pad. Sent on change rather than on input: dragging fires continuously.
 const sendSpeed = () => post('/api/speed', {limit: speed.value / 100});
+
+// ---- where the ultrasonic is looking ------------------------------------
+const aimText = v => v === 0 ? 'forward'
+  : Math.abs(v) + '\u00b0 ' + (v < 0 ? 'left' : 'right');
+$('pan').oninput = () => $('panval').textContent = aimText(+$('pan').value);
+$('pan').onchange = () => post('/api/pan', {angle: +$('pan').value});
+$('pancentre').onclick = () => {
+  $('pan').value = 0;
+  $('panval').textContent = 'forward';
+  post('/api/pan', {angle: 0});
+};
+$('trim').oninput = () => $('trimval').textContent = $('trim').value + '\u00b0';
+$('trim').onchange = () => post('/api/pan', {trim: +$('trim').value});
+// The trim is a property of the car, not of this browser, so take the
+// robot's value once rather than pushing this page's default over it.
+let panSynced = false;
+function renderPan(p) {
+  const have = !!p;
+  ['panrow', 'trimrow', 'panhint'].forEach(id => $(id).hidden = !have);
+  if (!have) { $('panaim').textContent = 'none'; return; }
+  if (!panSynced) {
+    panSynced = true;
+    $('pan').value = p.angle;  $('panval').textContent = aimText(p.angle);
+    $('trim').value = p.trim;  $('trimval').textContent = p.trim + '\u00b0';
+  }
+  $('panaim').textContent = p.settled ? aimText(p.angle) : 'moving\u2026';
+}
 speed.onchange = sendSpeed;
 sendSpeed();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -1011,7 +1062,8 @@ async function telemetry() {
 
     // diagnostics
     const a = d.allowed || {vx: 0, vy: 0, omega: 0};
-    $('range').textContent = d.range_cm === null ? '--' : d.range_cm + ' cm';
+    $('range').textContent = d.range_cm === null ? '--'
+      : d.range_cm < 0 ? 'clear' : d.range_cm + ' cm';
     $('vx').textContent = a.vx.toFixed(2);
     $('vy').textContent = a.vy.toFixed(2);
     $('om').textContent = a.omega.toFixed(2);
@@ -1032,6 +1084,7 @@ async function telemetry() {
 
     if (d.drivetrain) { renderDrivetrain(d.drivetrain); drawWheels(d.drivetrain); }
     renderPath(d.path);
+    renderPan(d.pan);
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length
@@ -1043,6 +1096,18 @@ async function telemetry() {
 applyTheme();
 loadBehaviors();
 telemetry();
+// ---- power ---------------------------------------------------------------
+$('poweroff').onclick = async () => {
+  if (!confirm('Shut the Pi down? The page will stop responding, and the car '
+             + 'has to be power-cycled to come back.')) return;
+  $('poweroff').disabled = true;
+  const r = await post('/api/shutdown', {confirm: 'shutdown'});
+  $('powerinfo').textContent = r && r.shutting_down
+    ? 'shutting down \u2014 wait for the green light to stop blinking'
+    : ((r && r.error) || 'could not reach the robot');
+  if (!(r && r.shutting_down)) $('poweroff').disabled = false;
+};
+
 setInterval(telemetry, 500);
 </script>
 </body>
