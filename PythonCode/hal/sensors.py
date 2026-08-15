@@ -5,6 +5,7 @@ boolean with a documented meaning, so nothing above has to remember that these
 particular sensors pull their output *low* when they see something.
 """
 
+import time
 from dataclasses import dataclass
 
 from gpiozero import DigitalInputDevice, DistanceSensor
@@ -63,7 +64,10 @@ class RangeFinder:
     def read_smoothed_cm(self):
         """Moving average -- single ultrasonic reads are noisy."""
         current = self.read_cm()
-        self.average_cm = 0.8 * current + 0.2 * self.average_cm
+        if self.average_cm is None:
+            self.average_cm = current      # do not drag the first reading down
+        else:
+            self.average_cm = 0.8 * current + 0.2 * self.average_cm
         return self.average_cm
 
 
@@ -78,17 +82,43 @@ class SerialRangeFinder:
 
     def __init__(self, link):
         self.link = link
-        self.average_cm = 0.0
+        self.average_cm = None
 
     def read_cm(self):
+        """Distance in cm, negative for nothing within range, None for no idea.
+
+        Three outcomes, and conflating any two of them is how a safety layer
+        ends up doing nothing at the moment it is needed:
+
+          a number    something is that far away
+          negative    the pulse timed out, so nothing is within about 4m. This
+                      is open road, and an honest answer.
+          None        the board has stopped talking. Not an answer at all.
+
+        Telemetry keeps its last value forever once the link goes quiet, so
+        `fresh` is the only thing that can tell the difference between a live
+        reading and a photograph of one.
+        """
+        if not self.link.telemetry.fresh:
+            return None
         value = self.link.telemetry.range_cm
-        return -1.0 if value is None else value
+        return None if value is None else value
 
     def read_smoothed_cm(self):
         current = self.read_cm()
+        if current is None:
+            # Deliberately not the last good value. Holding one would let the
+            # safety layer keep clamping against a number nothing is measuring
+            # any more, and it would look exactly like a working sensor.
+            self.average_cm = None
+            return None
         if current < 0:
-            return self.average_cm      # keep the last good value on a miss
-        self.average_cm = 0.8 * current + 0.2 * self.average_cm
+            self.average_cm = None      # nothing to average towards
+            return current
+        if self.average_cm is None:
+            self.average_cm = current
+        else:
+            self.average_cm = 0.8 * current + 0.2 * self.average_cm
         return self.average_cm
 
 

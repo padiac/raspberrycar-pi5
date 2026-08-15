@@ -262,6 +262,7 @@ class Robot:
         return WorldState(
             dt=dt, frame=frame, frame_size=size, detections=detections,
             range_cm=range_cm, proximity=proximity, floor=floor,
+            range_expected=self.rangefinder is not None,
         )
 
     def _drive(self, velocity):

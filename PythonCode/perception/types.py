@@ -50,7 +50,9 @@ class WorldState:
     frame: object = None                # BGR numpy array, or None if camera off
     frame_size: tuple = (0, 0)          # (width, height)
     detections: list = field(default_factory=list)   # list[Detection]
-    range_cm: float = None              # ultrasonic, None if unavailable
+    range_cm: float = None              # ultrasonic; None unknown, <0 clear
+    range_expected: bool = False        # a rangefinder is fitted, so None
+                                        # means it went quiet, not absent
     proximity: Proximity = None         # side infrared
     floor: Floor = None                 # downward line sensors
 

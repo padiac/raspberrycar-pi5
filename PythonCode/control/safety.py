@@ -90,6 +90,17 @@ class SafetyLayer:
                 if vx > ceiling:
                     reasons.append(f"obstacle {distance:.0f}cm ahead, forward limited")
                     vx = ceiling
+        elif vx > 0 and world.range_expected and distance is None:
+            # A fitted sensor that has stopped answering is a fault, and a fault
+            # is not open road. The two used to be indistinguishable: a missed
+            # reading came back as the last good value, or as zero before there
+            # had ever been a good one, and zero fails the `> 0` test above, so
+            # the limiter quietly did nothing.
+            #
+            # A negative reading is not this. That is the pulse timing out with
+            # nothing within about 4m, which is a real answer meaning clear.
+            reasons.append("no range reading, forward blocked")
+            vx = 0.0
 
         # -- side clearance, from the infrared pair -------------------------
         # These only see to the sides, so they gate strafing rather than

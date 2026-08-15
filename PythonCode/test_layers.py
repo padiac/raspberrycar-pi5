@@ -113,6 +113,25 @@ check_eq("obstacle left: strafe right allowed", out.vy, 1.0)
 out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(left=True, right=True)))
 check_eq("boxed in: forward blocked", out.vx, 0.0)
 
+print("\na sensor that has gone quiet is a fault, not open road")
+# Three states that used to look alike. A missed reading came back as the last
+# good value, or as zero before there had been one, and zero fails the layer's
+#  test -- so the limiter did nothing at the moment it mattered most.
+out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=None, range_expected=True))
+check_eq("rangefinder silent: forward blocked", out.vx, 0.0)
+
+out = safety.filter(Velocity(vx=-1.0), WorldState(range_cm=None, range_expected=True))
+check_eq("  and reversing away from it still allowed", out.vx, -1.0)
+
+# A timed-out pulse means nothing within about 4m. That is an answer, and the
+# answer is that the road is clear.
+out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=-1.0, range_expected=True))
+check_eq("nothing within range: forward allowed", out.vx, 1.0)
+
+# No sensor fitted at all is different again, and must not immobilise the car.
+out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=None, range_expected=False))
+check_eq("no rangefinder fitted: forward allowed", out.vx, 1.0)
+
 safety.enabled = False
 out = safety.filter(Velocity(vx=1.0), world(range_cm=5))
 check_eq("disabled: nothing is clamped", out.vx, 1.0)
