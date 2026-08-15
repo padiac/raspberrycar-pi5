@@ -37,6 +37,10 @@ class Behavior:
     requires = ()
     #: True to have the robot switch object detection on while this runs.
     wants_detection = False
+    #: False for a behaviour whose output is already a finished command
+    #: rather than a fresh intention, so the speed limit does not apply to
+    #: it twice. Replay is the only such case.
+    governed = True
 
     def start(self, robot):
         """Called once when this behaviour becomes active."""

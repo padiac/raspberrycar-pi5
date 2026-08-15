@@ -11,6 +11,10 @@ class ReplayBehavior(Behavior):
     description = "Drives back the route you recorded, at the same speeds."
     category = "mission"
     requires = ("motors",)
+    # The recorded segments were already governed when they were driven, so
+    # scaling them again would replay the route at a fraction of the speed
+    # it was recorded at, and slower still on each round trip.
+    governed = False
 
     def __init__(self, recorder):
         self.recorder = recorder

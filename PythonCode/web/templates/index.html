@@ -328,7 +328,14 @@
   button.k {
     padding: 19px 0; font-size: 18px; font-weight: 600; border-radius: var(--r-md);
     background: var(--surface); border: 1px solid var(--line); color: var(--text);
-    box-shadow: var(--sh-xs); touch-action: manipulation; user-select: none;
+    box-shadow: var(--sh-xs);
+    /* Hold a direction on iOS and Safari decides you are selecting text:
+       the arrow highlights and the copy/lookup callout appears, which is
+       exactly wrong for a control you are meant to hold down. Safari wants
+       the prefixed properties, and touch-action: none rather than
+       manipulation, so the press is never reinterpreted as a pan. */
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
     transition: transform .08s, background .12s, border-color .12s, color .12s;
   }
   button.k:hover { border-color: var(--line-firm); }
@@ -526,7 +533,11 @@ let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
 let detections = [], currentTarget = null;
 
 speed.oninput = () => $('speedval').textContent = speed.value + '%';
-const scale = () => speed.value / 100;
+// The limit lives on the robot, so it governs patrol and follow as well as
+// the pad. Sent on change rather than on input: dragging fires continuously.
+const sendSpeed = () => post('/api/speed', {limit: speed.value / 100});
+speed.onchange = sendSpeed;
+sendSpeed();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // ---- theme --------------------------------------------------------------
@@ -583,7 +594,7 @@ function flash(text) {
 setInterval(() => {
   const moving = vx || vy || om;
   if (moving) {
-    post('/api/drive', {vx: vx * scale(), vy: vy * scale(), omega: om * scale()});
+    post('/api/drive', {vx, vy, omega: om});
     lastMoving = true;
   } else if (lastMoving) {
     post('/api/drive', {vx: 0, vy: 0, omega: 0});

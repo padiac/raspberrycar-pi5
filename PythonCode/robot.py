@@ -42,6 +42,18 @@ def _optional(name, factory):
 
 
 class Robot:
+    #: Scales every behaviour's request on the way to the safety layer, so
+    #: the speed control is a property of the robot rather than of manual
+    #: driving. Without it the slider governed only the d-pad and every
+    #: autonomous behaviour ran at whatever its constants happened to say,
+    #: which is how patrol came to launch itself across the room at 0.8.
+    #:
+    #: Like the safety layer this only ever removes motion. Unlike it, this
+    #: is the driver's choice rather than the machine's, so it lives here
+    #: and not there -- safety refuses what is dangerous, the governor sets
+    #: how briskly the rest happens.
+    speed_limit = 0.15
+
     def __init__(self):
         self.drivetrain = _optional("drivetrain", build_drivetrain)
 
@@ -269,8 +281,11 @@ class Robot:
                 world = self._perceive(dt)
                 with self.lock:
                     self.world = world
-                    self.requested = self.behavior.update(self, world)
-                    self._drive(self.safety.filter(self.requested, world))
+                    requested = self.behavior.update(self, world)
+                    if self.behavior.governed:
+                        requested = requested.scaled(self.speed_limit)
+                    self.requested = requested
+                    self._drive(self.safety.filter(requested, world))
                     self.behavior_error = None
                     # Record what reached the wheels rather than what was asked
                     # for, so a replay reproduces the drive that happened and

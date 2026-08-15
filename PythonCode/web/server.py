@@ -81,6 +81,18 @@ def api_drive():
     return jsonify(requested=velocity.as_dict(), behavior=robot.behavior.name)
 
 
+@app.route("/api/speed", methods=["POST"])
+def api_speed():
+    """The one speed control: scales every behaviour, not just the d-pad."""
+    data = request.get_json(silent=True) or {}
+    if "limit" in data:
+        try:
+            robot.speed_limit = max(0.05, min(1.0, float(data["limit"])))
+        except (TypeError, ValueError):
+            return jsonify(error="limit must be a number"), 400
+    return jsonify(limit=robot.speed_limit)
+
+
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
     robot.emergency_stop()
