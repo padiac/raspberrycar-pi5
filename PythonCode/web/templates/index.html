@@ -360,6 +360,9 @@
        should be as wide as it is tall. */
     #dirpad button.k { aspect-ratio: 1; padding: 0; display: grid;
                        place-items: center; font-size: 22px; }
+    /* The arrows want to be big; the word in the middle is a label, not a
+       glyph, and reads as shouting at the same size. */
+    #dirpad button.k.mini { font-size: 12.5px; }
   }
 
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -477,8 +480,10 @@
   </div>
 
   <div class="row" style="margin-top:14px">
-    <label>speed</label><span class="val" id="speedval">60%</span>
-    <input type="range" id="speed" min="20" max="100" value="60">
+    <label>speed</label><span class="val" id="speedval">15%</span>
+    <!-- Starts low. The car is quick enough to pull its own USB lead out, and
+         a tethered first drive is the normal case, not the exception. -->
+    <input type="range" id="speed" min="5" max="100" value="15">
   </div>
   <div class="row">
     <label>chassis</label>

@@ -107,11 +107,17 @@ void driveMotor(int pwmPin, int in1, int in2, float speed) {
 // pushes diagonally; summing four diagonal pushes gives motion in any
 // direction without the chassis turning to face it.
 void applyVelocity(float vx, float vy, float w) {
+  // vy is positive to the RIGHT and w is positive turning RIGHT, matching
+  // Velocity on the Pi. The textbook equations use the opposite sense for
+  // both (ROS REP-103: y left, yaw counter-clockwise), so those terms are
+  // negated relative to what most references print. Forward is identical
+  // either way, which is exactly why getting it wrong stays hidden until
+  // someone strafes.
   float wheel[4] = {
-    vx - vy - w,   // front left
-    vx + vy + w,   // front right
-    vx + vy - w,   // rear left
-    vx - vy + w    // rear right
+    vx + vy + w,   // front left
+    vx - vy - w,   // front right
+    vx - vy + w,   // rear left
+    vx + vy - w    // rear right
   };
 
   // Scale down together if any wheel exceeds full power. Clipping each one on

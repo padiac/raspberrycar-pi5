@@ -58,6 +58,7 @@ class PathRecorder:
     def disarm(self):
         with self.lock:
             self._close()
+            self._trim_trailing_stops()
             self.recording = False
         return self.status()
 
@@ -80,8 +81,18 @@ class PathRecorder:
 
     def _close(self):
         if self._open is not None and self._open_seconds >= MIN_SEGMENT:
-            self.segments.append(Segment(self._open, self._open_seconds))
+            # Arming happens before you start driving and disarming after you
+            # finish, so a path would otherwise open and close with however long
+            # you spent reaching for the button -- replayed faithfully as the car
+            # sitting still. A pause in the middle is real and is kept; the
+            # stillness either side of the path is not part of it.
+            if self._open.moving or self.segments:
+                self.segments.append(Segment(self._open, self._open_seconds))
         self._open, self._open_seconds = None, 0.0
+
+    def _trim_trailing_stops(self):
+        while self.segments and not self.segments[-1].velocity.moving:
+            self.segments.pop()
 
     # -- reading -----------------------------------------------------------
 

@@ -191,14 +191,21 @@ class MecanumDrive(Drivetrain):
         self.motors = (self.front_left, self.front_right, self.rear_left, self.rear_right)
 
     def wheel_speeds(self, v):
-        # Standard mecanum inverse kinematics. vy flips sign between the left
-        # and right pairs, and between front and rear, because that is how the
-        # roller angles are mirrored across the chassis.
+        # Mecanum inverse kinematics: each roller sits at 45 degrees, so a
+        # wheel pushes diagonally and four diagonal pushes sum to motion in
+        # any direction.
+    # This project's convention is vy positive to the RIGHT and omega positive
+    # turning RIGHT, as Velocity documents and as the differential drive and the
+    # d-pad already assume. The textbook mecanum equations are written the other
+    # way round -- ROS REP-103 puts y to the left and positive yaw
+    # counter-clockwise -- so both of those terms carry the opposite sign here.
+    # Getting this wrong is quiet: forward still works, because vx is the same
+    # in both conventions, and only sideways and turning come out mirrored.
         return [
-            v.vx - v.vy - v.omega,   # front left
-            v.vx + v.vy + v.omega,   # front right
-            v.vx + v.vy - v.omega,   # rear left
-            v.vx - v.vy + v.omega,   # rear right
+            v.vx + v.vy + v.omega,   # front left
+            v.vx - v.vy - v.omega,   # front right
+            v.vx - v.vy + v.omega,   # rear left
+            v.vx + v.vy - v.omega,   # rear right
         ]
 
     def _drive(self, speeds):
@@ -237,12 +244,14 @@ class SerialDrivetrain(Drivetrain):
 
     def wheel_speeds(self, v):
         # Same kinematics as MecanumDrive, kept here only so this side can
-        # predict the wheels before the board has reported back.
+        # predict the wheels before the board has reported back. It has to
+        # match the firmware's mixer, sign for sign, or the diagram in the UI
+        # disagrees with the car for the moment before telemetry arrives.
         return [
-            v.vx - v.vy - v.omega,
             v.vx + v.vy + v.omega,
-            v.vx + v.vy - v.omega,
+            v.vx - v.vy - v.omega,
             v.vx - v.vy + v.omega,
+            v.vx + v.vy - v.omega,
         ]
 
     def _drive(self, speeds):

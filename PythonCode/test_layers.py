@@ -4,7 +4,7 @@ Neither needs a motor, a sensor or a camera, which is the point -- the layering
 is what makes them testable at all.
 """
 
-from hal.drivetrain import DifferentialDrive, MecanumDrive, Velocity, _normalise
+from hal.drivetrain import DifferentialDrive, MecanumDrive, Velocity, _normalise, SerialDrivetrain
 from hal.sensors import Proximity
 from control.safety import SafetyLayer
 from perception.types import Detection, WorldState
@@ -33,17 +33,41 @@ print("mecanum inverse kinematics  [front_left, front_right, rear_left, rear_rig
 # Build without touching GPIO by bypassing __init__.
 mec = MecanumDrive.__new__(MecanumDrive)
 
+diff_for_sign = DifferentialDrive.__new__(DifferentialDrive)
 check("drive straight",        mec.wheel_speeds(Velocity(vx=1)),          [1, 1, 1, 1])
 check("reverse",               mec.wheel_speeds(Velocity(vx=-1)),         [-1, -1, -1, -1])
-check("strafe right",          mec.wheel_speeds(Velocity(vy=1)),          [-1, 1, 1, -1])
-check("strafe left",           mec.wheel_speeds(Velocity(vy=-1)),         [1, -1, -1, 1])
-check("spin right",            mec.wheel_speeds(Velocity(omega=1)),       [-1, 1, -1, 1])
-check("diagonal fwd+right",    mec.wheel_speeds(Velocity(vx=1, vy=1)),    [0, 2, 2, 0])
+# These four are the ones with a sign convention to get wrong, and they were
+# wrong: the mixer had been written to the textbook form (ROS REP-103, y left
+# and yaw counter-clockwise) while Velocity, the d-pad and the differential
+# drive all mean vy right and omega right. The expectations below had been
+# copied from the mixer rather than derived from the convention, so the test
+# agreed with the car and both disagreed with the steering wheel. Derive them
+# from what the driver asked for: strafing right means the wheels that push
+# forward-right drive forward, and turning right means the left side outruns
+# the right.
+check("strafe right",          mec.wheel_speeds(Velocity(vy=1)),          [1, -1, -1, 1])
+check("strafe left",           mec.wheel_speeds(Velocity(vy=-1)),         [-1, 1, 1, -1])
+check("spin right",            mec.wheel_speeds(Velocity(omega=1)),       [1, -1, 1, -1])
+check("spin left",             mec.wheel_speeds(Velocity(omega=-1)),      [-1, 1, -1, 1])
+check("diagonal fwd+right",    mec.wheel_speeds(Velocity(vx=1, vy=1)),    [2, 0, 0, 2])
+check("diagonal fwd+left",     mec.wheel_speeds(Velocity(vx=1, vy=-1)),   [0, 2, 2, 0])
+
+# The serial chassis predicts the wheels locally until the board reports back,
+# so a disagreement here shows up as the diagram flickering the wrong way.
+check("serial mixer agrees with mecanum",
+      SerialDrivetrain.wheel_speeds(None, Velocity(vx=0.3, vy=0.7, omega=-0.2)),
+      mec.wheel_speeds(Velocity(vx=0.3, vy=0.7, omega=-0.2)))
+
+# Turning right must move the left side forward relative to the right on both
+# chassis. Stated once, in the language of the driver, so the two cannot drift
+# apart again.
+left, right = diff_for_sign.wheel_speeds(Velocity(omega=1))
+check_eq("differential turns right the same way", left > right, True)
 check("stopped",               mec.wheel_speeds(Velocity()),              [0, 0, 0, 0])
 
 print("\nnormalisation keeps direction (this is why we do not clip per wheel)")
 check("diagonal scaled to unit", _normalise(mec.wheel_speeds(Velocity(vx=1, vy=1))),
-      [0, 1, 1, 0])
+      [1, 0, 0, 1])
 # Full throttle plus full turn: clipping each wheel would give [1,1] on a
 # differential chassis and drive straight instead of turning.
 diff = DifferentialDrive.__new__(DifferentialDrive)
