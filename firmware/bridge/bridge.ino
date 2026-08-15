@@ -81,6 +81,11 @@ Servo cam;
 float gVx = 0, gVy = 0, gW = 0;
 float gWheel[4] = {0, 0, 0, 0};
 bool gStopped = true;
+//: Which command is in charge of the motors: the velocity mixer, or a raw
+//: per-wheel $W. This has to be a mode rather than a test on the velocity
+//: values, because zero is a perfectly ordinary thing to be commanded and
+//: skipping the mixer for it means "stop" never reaches the motors.
+bool gRawWheels = false;
 //: Last velocity command. Only this feeds the motion watchdog.
 unsigned long gLastCommand = 0;
 //: Last heartbeat, kept only so link liveness can be reported separately.
@@ -126,6 +131,7 @@ void applyVelocity(float vx, float vy, float w) {
 
 void stopNow() {
   gVx = gVy = gW = 0;
+  gRawWheels = false;
   applyVelocity(0, 0, 0);
 }
 
@@ -177,6 +183,7 @@ bool parseLine(char *line) {
         gVx = constrain(vx, -1.0f, 1.0f);
         gVy = constrain(vy, -1.0f, 1.0f);
         gW  = constrain(w,  -1.0f, 1.0f);
+        gRawWheels = false;      // the mixer is driving again
         gLastCommand = millis();
       }
       return true;
@@ -213,7 +220,8 @@ bool parseLine(char *line) {
         driveMotor(PWMD, DIN1, DIN2, constrain(w3, -1.0f, 1.0f) * DIR[3]);
         gWheel[0] = w0; gWheel[1] = w1; gWheel[2] = w2; gWheel[3] = w3;
         gStopped = !(w0 || w1 || w2 || w3);
-        gVx = gVy = gW = 0;      // the mixer must not fight this next tick
+        gVx = gVy = gW = 0;
+        gRawWheels = true;       // the mixer must not fight this next tick
         gLastCommand = millis();
       }
       return true;
@@ -272,10 +280,11 @@ void loop() {
   if (!gStopped && millis() - gLastCommand > COMMAND_TIMEOUT_MS) {
     stopNow();
     sendLine("!,command timeout, stopped");
-  } else if (gVx || gVy || gW) {
-    // Only re-apply the mixer when a velocity is what is being commanded. A
-    // raw $W sets the motors directly, and mixing zeroes over the top of it
-    // would cancel it out on the very next tick.
+  } else if (!gRawWheels) {
+    // Re-apply the mixer unless a raw $W is driving, in which case it sets
+    // the motors directly and mixing over the top would cancel it out on the
+    // very next tick. Note this deliberately runs for a zero velocity too:
+    // stopping is a command like any other and has to reach the pins.
     applyVelocity(gVx, gVy, gW);
   }
 

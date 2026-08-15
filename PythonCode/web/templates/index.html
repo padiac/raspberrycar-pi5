@@ -350,8 +350,16 @@
   .drive { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
   #wheels { width: 168px; height: 210px; }
   @media (max-width: 560px) {
-    .drive { grid-template-columns: 1fr; justify-items: center; }
-    #wheels { width: 150px; height: 188px; }
+    /* One column, and the pad takes the full width of it. justify-items
+       here would shrink the pad to its content and leave three thin pills
+       down the middle of the screen; only the diagram wants centring. */
+    .drive { grid-template-columns: 1fr; }
+    #dirpad { max-width: 380px; margin: 0 auto; }
+    #wheels { width: 150px; height: 188px; justify-self: center; }
+    /* Square keys. A thumb aims at an area, not at a label, so the target
+       should be as wide as it is tall. */
+    #dirpad button.k { aspect-ratio: 1; padding: 0; display: grid;
+                       place-items: center; font-size: 22px; }
   }
 
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -396,7 +404,7 @@
     .grid { grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 9px; }
     .panel { padding: 15px; }
     .tel { grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); }
-    button.k { padding: 21px 0; }
+    .pad.two button.k { padding: 21px 0; }
   }
 </style>
 </head>

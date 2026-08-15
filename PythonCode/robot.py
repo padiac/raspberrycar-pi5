@@ -150,7 +150,13 @@ class Robot:
     def emergency_stop(self):
         self.select("idle")
         with self.lock:
-            self._drive(Velocity.STOP)
+            self.allowed = Velocity.STOP
+            if self.drivetrain is not None:
+                # stop() rather than a zero velocity: a drivetrain that talks
+                # to another board gets to send a distinct 'stop' rather than
+                # a velocity that happens to be zero, so a panic never has to
+                # survive the same code path as ordinary driving.
+                self.drivetrain.stop()
 
     def set_drivetrain(self, kind):
         """Swap the chassis model at runtime. Returns (ok, message).
