@@ -899,20 +899,38 @@ addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) { e.preventDef
 addEventListener('blur', halt);
 
 const DEAD = 0.12, dz = v => Math.abs(v) < DEAD ? 0 : v;
+// A pad paired to the robot itself wins: it is reported over telemetry and
+// drives the car directly, without this page in the loop at all. renderGamepad
+// overwrites this label when it sees one.
+let browserPad = 'none';
+// The Gamepad API only exists in a secure context, and the robot is plain HTTP
+// on a LAN address it can never hold a certificate for. Worth saying so, since
+// a flat "none" reads as a broken controller rather than a closed door.
+const padPossible = !!navigator.getGamepads && window.isSecureContext;
 function pollPad() {
-  const pad = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(p => p);
+  if (!padPossible) {
+    browserPad = navigator.getGamepads ? 'needs https here' : 'unsupported';
+    return;    // no point polling every frame for something that cannot appear
+  }
+  const pad = [...navigator.getGamepads()].find(p => p);
   if (pad) {
-    $('gp').textContent = 'on';
+    browserPad = 'browser';
     const f = dz(-pad.axes[1]);
     const s = dof >= 3 ? dz(pad.axes[0]) : 0;
     const t = dz(pad.axes[2] !== undefined ? pad.axes[2] : 0);
     if (f || s || t) { padActive = true; setV(f, s, t); }
     else if (padActive) { padActive = false; setV(0, 0, 0); }
     if (pad.buttons[1] && pad.buttons[1].pressed) halt();
-  } else { $('gp').textContent = 'none'; padActive = false; }
+  } else { browserPad = 'none'; padActive = false; }
   requestAnimationFrame(pollPad);
 }
-requestAnimationFrame(pollPad);
+pollPad();
+
+function renderGamepad(g) {
+  $('gp').textContent = g && g.connected
+    ? g.name.replace(/\s*\(.*\)$/, '')
+    : browserPad;
+}
 
 // ---- behaviour tree drawing ---------------------------------------------
 function renderTree(node, prefix = '', isLast = true, isRoot = true) {
@@ -1085,6 +1103,7 @@ async function telemetry() {
     if (d.drivetrain) { renderDrivetrain(d.drivetrain); drawWheels(d.drivetrain); }
     renderPath(d.path);
     renderPan(d.pan);
+    renderGamepad(d.gamepad);
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
     $('hw').innerHTML = missing.length

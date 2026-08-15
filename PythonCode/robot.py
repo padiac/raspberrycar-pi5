@@ -23,6 +23,7 @@ from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
+from hal.gamepad import Gamepad
 from hal.sensors import (
     FloorArray, PanServo, ProximityArray, RangeFinder, SerialRangeFinder,
 )
@@ -86,6 +87,17 @@ class Robot:
         self.safety = SafetyLayer()
         self.recorder = PathRecorder()
 
+        # A controller is not a behaviour, it is a driver -- so it goes in
+        # through the same door as the on-screen pad and gets the same
+        # governor and the same safety layer. Optional: no evdev, no pad, no
+        # bother.
+        self.gamepad = _optional(
+            "gamepad",
+            lambda: Gamepad(self.manual, self.emergency_stop,
+                            holonomic=bool(self.drivetrain
+                                           and self.drivetrain.dof >= 3)),
+        )
+
         self.behaviors = build_behaviors(self.recorder)
         self.behavior = self.behaviors["idle"]
         self._attach_overlay()
@@ -109,6 +121,7 @@ class Robot:
             "detector": self.detector is not None,
             "rangefinder": self.rangefinder is not None,
             "pan": self.pan is not None,
+            "gamepad": bool(self.gamepad and self.gamepad.device),
             "proximity": self.proximity is not None,
             "floor": self.floor is not None,
         }
@@ -339,6 +352,7 @@ class Robot:
             ),
             "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
             "pan": self.pan.status() if self.pan else None,
+            "gamepad": self.gamepad.status() if self.gamepad else None,
             "proximity": world.proximity.as_dict() if world.proximity else None,
             "floor": world.floor.as_dict() if world.floor else None,
             "stream_fps": round(self.vision.stream_fps, 1) if self.vision else 0.0,
