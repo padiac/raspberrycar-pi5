@@ -461,6 +461,7 @@
   <span class="chip" id="movechip">idle</span>
   <span class="chip" id="safechip">safety</span>
   <span class="chip warn" id="aimchip" hidden>sensor turned away</span>
+  <span class="chip" id="idlechip" hidden>camera asleep</span>
   <button id="theme" title="Switch theme">◐</button>
   <button id="estop">STOP</button>
 </div>
@@ -1156,6 +1157,7 @@ async function telemetry() {
     renderPath(d.path);
     renderPan(d.pan);
     renderGamepad(d.gamepad);
+    renderIdle(d.idle);
     if (d.clip) { renderClipState(d.clip); if (d.clip.recording) clipTick(); }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
@@ -1273,6 +1275,17 @@ function measureBar() {
 measureBar();
 addEventListener('resize', measureBar);
 addEventListener('orientationchange', () => setTimeout(measureBar, 300));
+
+// ---- the camera switching itself off ------------------------------------
+// A camera that went to sleep on its own looks exactly like a camera that
+// broke, so it says which, and says how to undo it. Tapping is a POST, and a
+// POST is what wakes it -- so the fix is the same gesture as the complaint.
+function renderIdle(idle) {
+  if (!idle) { $('idlechip').hidden = true; return; }
+  $('idlechip').hidden = !idle.camera_slept;
+  $('idlechip').textContent = 'camera asleep — tap to wake';
+}
+$('idlechip').onclick = () => post('/api/camera', {enabled: true});
 
 setInterval(telemetry, 500);
 </script>

@@ -58,6 +58,13 @@ class Robot:
     #: is the driver's choice rather than the machine's, so it lives here
     #: and not there -- safety refuses what is dangerous, the governor sets
     #: how briskly the rest happens.
+    #: Nothing happening for this long and the camera goes off. It and the
+    #: detector are the largest thing on the power budget by some way --
+    #: measured at the wall, 0.96A idle against 1.42A with detection running
+    #: -- so a car left parked with a battery in it is spending half its
+    #: energy looking at a room nobody is asking about.
+    idle_camera_after = 300.0
+
     speed_limit = 0.15
     #: Momentary, from a controller's trigger: lifts the limit for as long
     #: as it is held rather than changing what the slider says. Zero unless
@@ -138,6 +145,16 @@ class Robot:
         self.behaviors = build_behaviors(self.recorder)
         self.behavior = self.behaviors["idle"]
         self._attach_overlay()
+
+        self.last_activity = time.monotonic()
+        #: True only when *this* turned the camera off. Someone who switched
+        #: it off by hand has made a decision, and waking it up for them
+        #: would be overruling it -- so only what was slept here is woken.
+        self.camera_slept = False
+        #: How many browsers are pulling the video right now. A phone that
+        #: locks stops pulling on its own, so this is a decent proxy for
+        #: whether anyone is actually looking.
+        self.stream_clients = 0
 
         self.requested = Velocity.STOP
         self.allowed = Velocity.STOP
@@ -282,12 +299,52 @@ class Robot:
 
     def manual(self, velocity):
         """Feed the manual behaviour, selecting it so the controls just work."""
+        if velocity.moving:
+            self.touch()
         if self.behavior.name != "manual":
             ok, message = self.select("manual")
             if not ok:
                 return False, message
         self.behaviors["manual"].command(velocity)
         return True, "ok"
+
+    # -- staying awake ------------------------------------------------------
+
+    def touch(self):
+        """Something happened. Called for anything that changes the robot."""
+        self.last_activity = time.monotonic()
+        if self.camera_slept:
+            self.camera_slept = False
+            if self.vision is not None:
+                self.vision.set_camera(True)
+                print("[idle] camera back on", flush=True)
+
+    def _idle_check(self):
+        """Turn the camera off if nothing has wanted it for a while.
+
+        Three things count as wanting it, and all three have to be absent:
+        somebody doing something, somebody watching the stream, and a behaviour
+        that cannot work without it. That last one matters -- following an
+        object while the camera sleeps would not be a saving, it would be a
+        behaviour quietly broken by a power-saving feature it never heard of.
+        """
+        if self.vision is None or self.camera_slept:
+            return
+        if self.idle_camera_after <= 0:
+            return                      # switched off; zero means never, not now
+        if not (self.camera and self.camera.enabled):
+            return                      # already off, by hand
+        if self.stream_clients > 0:
+            return
+        if "camera" in self.behavior.requires or self.behavior.wants_detection:
+            return
+        if time.monotonic() - self.last_activity < self.idle_camera_after:
+            return
+
+        self.camera_slept = True
+        self.vision.set_camera(False)
+        print(f"[idle] nothing for {self.idle_camera_after:.0f}s, camera off",
+              flush=True)
 
     # -- things a driver can ask for, from a pad or from the page -----------
 
@@ -442,6 +499,7 @@ class Robot:
                         self.recorder.observe(self.allowed, dt)
                 if self.gamepad is not None:
                     self.gamepad.alert(self.alert_level(world))
+                self._idle_check()
             except Exception as exc:  # noqa: BLE001 - a bad behaviour must not run away
                 with self.lock:
                     self.behavior_error = f"{type(exc).__name__}: {exc}"
@@ -465,6 +523,12 @@ class Robot:
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
             "speed_limit": self.speed_limit,
+            "idle": {
+                "after_s": self.idle_camera_after,
+                "quiet_s": round(time.monotonic() - self.last_activity, 1),
+                "camera_slept": self.camera_slept,
+                "watchers": self.stream_clients,
+            },
             "path": self.recorder.status(),
             "drivetrain": (
                 {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),

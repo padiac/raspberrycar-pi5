@@ -32,6 +32,18 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 robot = Robot()
 
 
+@app.before_request
+def _note_activity():
+    """Anything that changes the robot counts as somebody being here.
+
+    Reads deliberately do not. The page polls telemetry twice a second, so
+    counting those would mean a tab left open on a desk keeps the camera
+    running all night, which is the case this exists to catch.
+    """
+    if request.method == "POST":
+        robot.touch()
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -45,6 +57,15 @@ def stream():
     frames = robot.vision.frames
 
     def generate():
+        # Counted around the whole generator, so a browser that goes away
+        # without saying goodbye is still let go of when its socket dies.
+        robot.stream_clients += 1
+        try:
+            yield from _frames(frames)
+        finally:
+            robot.stream_clients = max(0, robot.stream_clients - 1)
+
+    def _frames(frames):
         while True:
             got, jpeg = frames.wait_for_next(timeout=2.0)
             # While the camera is off nothing is published, so re-send the last
@@ -102,6 +123,21 @@ def api_pan():
     except (TypeError, ValueError):
         return jsonify(error="angle and trim must be numbers"), 400
     return jsonify(robot.pan.status())
+
+
+@app.route("/api/idle", methods=["POST"])
+def api_idle():
+    """How long the robot waits before switching its own camera off."""
+    data = request.get_json(silent=True) or {}
+    if "after_s" in data:
+        try:
+            # Zero disables it. A very short one would fight the person
+            # setting it, so the floor is a sensible minute.
+            value = float(data["after_s"])
+            robot.idle_camera_after = 0.0 if value <= 0 else max(60.0, value)
+        except (TypeError, ValueError):
+            return jsonify(error="after_s must be a number"), 400
+    return jsonify(after_s=robot.idle_camera_after)
 
 
 @app.route("/api/speed", methods=["POST"])
