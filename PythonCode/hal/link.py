@@ -33,6 +33,11 @@ BAUD = 115200
 HEARTBEAT_S = 0.4
 #: Consider the board gone if no telemetry arrives for this long.
 STALE_S = 1.0
+#: Silence for this long means the link is broken even though the OS
+#: still has a perfectly good file descriptor open. Generous next to the
+#: 20Hz the board reports at, and next to the two seconds it takes to
+#: reboot, so an ordinary reset is ridden out rather than reacted to.
+SILENCE_S = 4.0
 
 
 def checksum(body):
@@ -77,6 +82,7 @@ class SerialLink:
         import serial  # pyserial
 
         self._serial_mod = serial
+        self._opened_at = 0.0
         self.port_name = port or os.environ.get("CAR_SERIAL") or find_port()
         if not self.port_name:
             raise RuntimeError("no USB serial device found (is the ESP32 plugged in?)")
@@ -104,6 +110,7 @@ class SerialLink:
             # to boot before expecting it to answer.
             time.sleep(2.0)
             self.port.reset_input_buffer()
+            self._opened_at = time.monotonic()
             self.connected = True
             print(f"[link] {self.port_name} open", flush=True)
         except Exception as exc:  # noqa: BLE001
@@ -116,18 +123,50 @@ class SerialLink:
             if not self.connected:
                 time.sleep(1.0)
                 self._open()
+                buffer = b""
                 continue
             try:
                 chunk = self.port.read(256)
             except Exception:  # noqa: BLE001 - cable pulled
                 self.connected = False
                 continue
+
+            # A board that has stopped talking is a broken link, and it does not
+            # look like one from here: the descriptor stays valid, reads return
+            # empty, and nothing ever raises. Reconnecting only on an exception
+            # meant that pulling the board's power while this was running left a
+            # healthy-looking port waiting forever for a frame that was never
+            # coming -- the car simply stopped responding, with no error
+            # anywhere to say why.
+            if self._silent_for_too_long():
+                print(f"[link] {self.port_name} silent, reopening", flush=True)
+                self._reopen()
+                buffer = b""
+                continue
+
             if not chunk:
                 continue
             buffer += chunk
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 self._handle(line.decode("ascii", "replace").strip())
+
+    def _silent_for_too_long(self):
+        """True if nothing has been parsed for a while.
+
+        Measured from the last good frame, or from when the port was opened if
+        there has never been one -- a board that was already dead when the port
+        opened has to be caught too, not just one that dies later.
+        """
+        since = self.telemetry.updated or self._opened_at
+        return since and (time.monotonic() - since) > SILENCE_S
+
+    def _reopen(self):
+        try:
+            self.port.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.connected = False
 
     def _handle(self, line):
         if not line.startswith("$") or "*" not in line:

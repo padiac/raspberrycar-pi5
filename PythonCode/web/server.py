@@ -92,7 +92,7 @@ def api_pan():
     data = request.get_json(silent=True) or {}
     try:
         if "trim" in data:
-            robot.pan.set_trim(data["trim"])
+            robot.set_pan_trim(data["trim"])
         if "angle" in data:
             robot.pan.look(data["angle"])
         if "by" in data:

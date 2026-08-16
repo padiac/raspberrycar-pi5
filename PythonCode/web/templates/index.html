@@ -460,6 +460,7 @@
   <span id="state"><b id="statename">—</b><small id="substate"></small></span>
   <span class="chip" id="movechip">idle</span>
   <span class="chip" id="safechip">safety</span>
+  <span class="chip warn" id="aimchip" hidden>sensor turned away</span>
   <button id="theme" title="Switch theme">◐</button>
   <button id="estop">STOP</button>
 </div>
@@ -625,7 +626,12 @@ let panSynced = false;
 function renderPan(p) {
   const have = !!p;
   ['panrow', 'trimrow', 'panhint'].forEach(id => $(id).hidden = !have);
-  if (!have) { $('panaim').textContent = 'none'; return; }
+  if (!have) { $('panaim').textContent = 'none'; $('aimchip').hidden = true; return; }
+  // The only sensor watching where the car is going is pointed somewhere else,
+  // so forward will be refused. Worth saying while the car is still standing
+  // still: the alternative is a driver pushing the stick and nothing happening.
+  $('aimchip').hidden = p.forward;
+  $('aimchip').textContent = 'sensor ' + aimText(p.angle) + ' — no forward';
   if (!panSynced) {
     panSynced = true;
     $('pan').value = p.angle;  $('panval').textContent = aimText(p.angle);

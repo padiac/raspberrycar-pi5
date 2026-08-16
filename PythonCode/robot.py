@@ -20,6 +20,7 @@ import threading
 import time
 
 from behaviors import build_behaviors
+from calibration import Calibration
 from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
@@ -64,6 +65,10 @@ class Robot:
     boost = 0.0
 
     def __init__(self):
+        # Read before any hardware is built: the pan servo is aimed the
+        # moment it is constructed, and aiming it at a remembered angle is
+        # the whole point.
+        self.calibration = Calibration()
         self.drivetrain = _optional("drivetrain", build_drivetrain)
 
         # When an ESP32 is driving, the sensors wired to it come back over the
@@ -74,7 +79,11 @@ class Robot:
             self.rangefinder = _optional(
                 "rangefinder (via ESP32)", lambda: SerialRangeFinder(self.link)
             )
-            self.pan = _optional("pan servo", lambda: PanServo(self.link))
+            self.pan = _optional(
+                "pan servo",
+                lambda: PanServo(self.link,
+                                 trim=self.calibration.get("pan_trim")),
+            )
             self.proximity = None
             self.floor = None
         else:
@@ -298,6 +307,18 @@ class Robot:
 
     def pan_centre(self):
         return self.pan.centre() if self.pan else None
+
+    def set_pan_trim(self, trim):
+        """Aim the head, and remember where forward turned out to be.
+
+        The saving lives here rather than in PanServo because a HAL device
+        should not know what a filesystem is; it knows how to point a servo.
+        """
+        if self.pan is None:
+            return None
+        self.pan.set_trim(trim)
+        self.calibration.set("pan_trim", self.pan.trim)
+        return self.pan.trim
 
     def cycle_behavior(self):
         """Next behaviour in the list, skipping any the hardware cannot do.
