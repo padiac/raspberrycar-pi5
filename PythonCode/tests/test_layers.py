@@ -4,6 +4,15 @@ Neither needs a motor, a sensor or a camera, which is the point -- the layering
 is what makes them testable at all.
 """
 
+import sys
+from pathlib import Path
+
+# Find the robot from wherever this is run. Relying on the working directory
+# instead -- which is what "sys.path.insert(0, '.')" amounts to -- works until
+# somebody runs the file from anywhere else, and then fails with an ImportError
+# about `hal` that says nothing about the actual problem.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from hal.drivetrain import DifferentialDrive, MecanumDrive, Velocity, _normalise, SerialDrivetrain
 from hal.sensors import Proximity
 from control.safety import SafetyLayer

@@ -183,21 +183,23 @@ would keep the car driving under a robot that had stopped thinking.
 
 ### Tests
 
-`test_layers.py` checks the kinematics and every safety rule, including a sweep
-asserting the safety layer never increases or reverses any axis.
-`test_tree.py` checks the tree semantics — status propagation, decorator
+`tests/test_layers.py` checks the kinematics and every safety rule, including a
+sweep asserting the safety layer never increases or reverses any axis.
+`tests/test_tree.py` checks the tree semantics — status propagation, decorator
 behaviour, reset, and that `Fallback` really does re-decide each tick.
-`test_link.py` checks the wire protocol against a stand-in port: framing,
+`tests/test_link.py` checks the wire protocol against a stand-in port: framing,
 checksums, that a corrupt line is dropped rather than obeyed, and that a
 "no echo" reading surfaces as `None` rather than a negative distance the safety
 layer would read as an obstacle 1cm away.
+`tests/test_follow.py` hands the follow behaviour a made-up world and checks
+what it decides — including the situations that are a nuisance to arrange in a
+room, like an ultrasonic that hears nothing back.
 
 None of them needs any hardware attached, which is the practical payoff of the
-split:
+split, and none of them cares where you run it from:
 
 ```
-cd PythonCode
-python3 test_layers.py && python3 test_tree.py && python3 test_link.py
+python3 PythonCode/tests/run_all.py
 ```
 
 ## Compatibility changes from the original
