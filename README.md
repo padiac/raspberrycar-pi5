@@ -284,7 +284,7 @@ by the layered runtime: each one grabbed the camera and GPIO exclusively, so
 they cannot run alongside `main.py` anyway.
 
 Note that `main_object_detection.py` and `main_PID_test.py` import `detect`,
-which only ever existed in `old_version_backup/` — they were already broken
+which only ever existed in `legacy/older/` — they were already broken
 upstream.
 
 ---
@@ -534,7 +534,7 @@ python调用摄像头有两种方式：
 
 ### 自动避障
 
-![自动避障效果展示](doc/obstacle_avoidance.gif)
+![自动避障效果展示](legacy/media/obstacle_avoidance.gif)
 
 基于超声波和红外，使小车在运行过程中不会撞上障碍物。
 
@@ -563,7 +563,7 @@ python调用摄像头有两种方式：
 ### 视觉车道循迹
 基于视觉，使小车沿车道线行驶。环境要求为白色的地板，黑色（深色）的车道线。
 
-![视觉车道循迹效果展示](doc/lane_tracking.gif) ![视觉车道循迹效果展示2](doc/lane_tracking2.gif)
+![视觉车道循迹效果展示](legacy/media/lane_tracking.gif) ![视觉车道循迹效果展示2](legacy/media/lane_tracking2.gif)
 
 主程序为main_lane_tracking.py，其流程大致如下：
 * 车道线检测
@@ -580,7 +580,7 @@ python调用摄像头有两种方式：
     * 电机控制：根据决策结果，控制小车电机输出
 
 在本实验中，车道线检测部分较容易实现，我们发现，在这种简单的环境下，固定阈值的二值化效果比大津法好。另外，因为我们的车道线偏蓝色，我们选择提取图像的R通道进行二值化。检测效果如图：      
-![车道线内侧点提取效果展示](doc/lane_detect.jpg)
+![车道线内侧点提取效果展示](legacy/media/lane_detect.jpg)
 
 运动控制部分相对较为复杂，我们只采用了一个简单的逻辑，效果还可以。
 
@@ -588,7 +588,7 @@ python调用摄像头有两种方式：
 
 识别并定位摄像头图像中的各类常见物体。
 
-![目标检测效果展示](doc/object_detection.gif)
+![目标检测效果展示](legacy/media/object_detection.gif)
 
 主程序为main_object_detection.py，其调用了[TensorFlow Object Detection API](https://github.com/tensorflow/models/tree/master/research/object_detection)，使用了训练好的的SSDLite目标检测模型，在树莓派端进行目标检测
 。

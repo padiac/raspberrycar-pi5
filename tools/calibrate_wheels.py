@@ -26,8 +26,13 @@ PUT THE CAR ON A STAND. Wheels off the ground throughout.
 
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, ".")
+# Reach the robot from wherever this is run. It used to assume the working
+# directory was PythonCode, which is fine right up until the script moves or
+# someone runs it from home -- and the failure is an ImportError about hal,
+# which says nothing about the actual problem.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "PythonCode"))
 from hal.link import SerialLink  # noqa: E402
 
 NAMES = ["front left", "front right", "rear left", "rear right"]

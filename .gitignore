@@ -8,3 +8,6 @@ __pycache__/
 /models/
 clips/
 calibration.json
+# A named pipe the remote editor keeps recreating. Fighting it is
+# not worth the trouble; it is not ours and it is not code.
+.lgd-nfy*
