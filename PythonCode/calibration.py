@@ -27,6 +27,11 @@ PATH = os.path.join(
 #: wrong by however much it did not.
 DEFAULTS = {
     "pan_trim": 0.0,
+    #: Duty cycle below which a commanded turn does not turn the car.
+    #: Rotating in place fights the rollers on all four mecanum wheels,
+    #: so it costs more than driving straight and has its own floor.
+    #: Zero means nobody has measured it, and nothing will be said.
+    "turn_floor": 0.0,
 }
 
 

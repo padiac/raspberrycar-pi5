@@ -118,7 +118,7 @@ class PatrolBehavior(Behavior):
         """Begin the sweep, or fall back on a guess with no head to sweep."""
         if robot.pan is None:
             return self._commit(
-                now, Velocity(omega=self._guess(robot) * TURN_SPEED),
+                robot, now, Velocity(omega=self._guess(robot) * TURN_SPEED),
                 TURN_HOLD_MIN, "blocked, picking a way round",
             )
         self.clearance = {}
@@ -153,9 +153,9 @@ class PatrolBehavior(Behavior):
 
         robot.pan.centre()
         self.scan = None
-        return self._decide(now)
+        return self._decide(robot, now)
 
-    def _decide(self, now):
+    def _decide(self, robot, now):
         best = max(self.clearance, key=lambda a: (self.clearance[a], -abs(a)))
         room = self.clearance[best]
 
@@ -163,7 +163,7 @@ class PatrolBehavior(Behavior):
             # Nowhere in front has room. Turning on the spot in a corner just
             # finds the same corner again, so back out and look afresh.
             return self._commit(
-                now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
+                robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
                 f"boxed in ({room:.0f}cm all round), backing out",
             )
 
@@ -187,15 +187,31 @@ class PatrolBehavior(Behavior):
             f"{int(a):+d}:{self.clearance[a]:.0f}" for a in sorted(self.clearance)
         )
         return self._commit(
-            now, Velocity(omega=direction * TURN_SPEED), hold,
+            robot, now, Velocity(omega=direction * TURN_SPEED), hold,
             f"most room {self._name(best)} ({room:.0f}cm) | {profile}",
         )
 
-    def _commit(self, now, velocity, seconds, state):
+    def _commit(self, robot, now, velocity, seconds, state):
         """Hold a manoeuvre for a while, so the car clears what stopped it
-        instead of twitching on the spot as the reading flickers."""
+        instead of twitching on the spot as the reading flickers.
+
+        Also says so when the manoeuvre cannot physically happen. A turn is
+        asked for as a fraction of full power and then scaled again by the
+        speed limit, and below a certain duty the motors buzz without moving
+        -- rotating in place fights the rollers on all four wheels, so it
+        costs more than driving straight. When that happens the behaviour is
+        working perfectly and the car sits still: it decides, commits, waits
+        out the hold, finds itself blocked, and decides again, for as long as
+        you leave it. Nothing in the logs looks wrong, because nothing is
+        wrong except the arithmetic.
+        """
         self.move = velocity
         self.until = now + seconds
+        floor = robot.calibration.get("turn_floor") if robot.calibration else 0.0
+        effective = abs(velocity.omega) * robot.speed_limit
+        if floor and velocity.omega and effective < floor:
+            state += (f" -- but {effective:.2f} is under this car's {floor:.2f} "
+                      f"turning floor, so it will not move; raise the speed")
         self.state = state
         return velocity
 
