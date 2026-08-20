@@ -64,6 +64,8 @@ class Telemetry:
     """Latest state reported by the firmware."""
 
     def __init__(self):
+        #: None until a frame arrives, then whatever the board said --
+        #: including a negative, which means nothing is within range.
         self.range_cm = None
         self.wheels = (0.0, 0.0, 0.0, 0.0)
         self.stopped = True
@@ -187,7 +189,17 @@ class SerialLink:
             except ValueError:
                 return
             tel = self.telemetry
-            tel.range_cm = None if range_cm < 0 else range_cm
+            # The board's -1 is kept as -1. It means the pulse timed out with
+            # nothing inside about 4m, which is a measurement, and the answer
+            # is that the road is clear. Folding it into None here -- which is
+            # what this line used to do -- makes it indistinguishable from the
+            # board having gone silent, and the safety layer above treats that
+            # as a fault and refuses to drive forward. The car then declines to
+            # move in precisely the situation where there is nothing in front
+            # of it at all.
+            #
+            # None still means something here: no frame has ever been parsed.
+            tel.range_cm = range_cm
             tel.wheels = wheels
             tel.stopped = stopped
             tel.updated = time.monotonic()

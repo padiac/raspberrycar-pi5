@@ -115,12 +115,24 @@ check("wheels parsed", tel.wheels, (1.0, 0.333, 0.333, 1.0))
 check("stopped flag parsed", tel.stopped, False)
 check("marked fresh", tel.fresh, True)
 
-# -1 means the sensor gave no echo; that should surface as None rather than a
-# negative distance leaking into the safety layer, where it would look like an
-# obstacle 1cm away.
+# -1 means the pulse timed out with nothing inside about 4m. That is a
+# measurement, and it says the road is clear -- so it is carried through as it
+# stands rather than folded into None.
+#
+# This check used to assert the opposite, and asserting it is what let the bug
+# live: with -1 turned into None here, "nothing is in front of me" became
+# indistinguishable from "the board has stopped talking", and the safety layer
+# above -- which is right to refuse to drive forward blind -- refused to drive
+# forward in an empty room. Reported as "it will not go forwards, everything
+# else is fine".
 noecho = "T,-1.0,0.000,0.000,0.000,0.000,1"
 link._handle(f"${noecho}*{checksum(noecho):02X}")
-check("no echo becomes None, not -1", link.telemetry.range_cm, None)
+check("no echo stays -1, not None", link.telemetry.range_cm, -1.0)
+check("  and the link still counts as fresh", link.telemetry.fresh, True)
+
+# None is reserved for the one thing it can honestly mean.
+fresh_link, _ = build_link()
+check("nothing received yet reads as None", fresh_link.telemetry.range_cm, None)
 
 print("\ncorrupt input is ignored")
 link, port = build_link()

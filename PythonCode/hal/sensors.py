@@ -101,8 +101,9 @@ class SerialRangeFinder:
         """
         if not self.link.telemetry.fresh:
             return None
-        value = self.link.telemetry.range_cm
-        return None if value is None else value
+        # Passed through as it stands, negative included. Deciding what a
+        # negative means is the safety layer's business, not this one's.
+        return self.link.telemetry.range_cm
 
     def forget(self):
         """Drop the running average, because it is about somewhere else now.
