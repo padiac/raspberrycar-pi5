@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hal.drivetrain import DifferentialDrive, MecanumDrive, Velocity, _normalise, SerialDrivetrain
 from hal.sensors import Proximity
-from control.safety import SafetyLayer
+from control.safety import NO_ECHO_CEILING, SafetyLayer
 from perception.types import Detection, WorldState
 
 FAILURES = []
@@ -164,10 +164,24 @@ check_eq("rangefinder silent: forward blocked", out.vx, 0.0)
 out = safety.filter(Velocity(vx=-1.0), WorldState(range_cm=None, range_expected=True))
 check_eq("  and reversing away from it still allowed", out.vx, -1.0)
 
-# A timed-out pulse means nothing within about 4m. That is an answer, and the
-# answer is that the road is clear.
+# A timed-out pulse is an answer, but a poor one. In a house it is usually not
+# "nothing within four metres" at all: sound leaves a pane of glass like light
+# leaves a mirror, so a floor-to-ceiling window is invisible from every
+# approach but head-on, and a smooth wall met at an angle is the same. Soft
+# things swallow the pulse instead. All of them report what an empty room
+# reports -- which is how this car kept driving into a window.
+#
+# So it may go, because refusing to cross open space would make it useless,
+# but only at a crawl.
 out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=-1.0, range_expected=True))
-check_eq("nothing within range: forward allowed", out.vx, 1.0)
+check_eq("nothing came back: creeps rather than charging", out.vx, NO_ECHO_CEILING)
+check_eq("  and says why", any("creep" in r for r in safety.last.interventions), True)
+
+out = safety.filter(Velocity(vx=0.1), WorldState(range_cm=-1.0, range_expected=True))
+check_eq("  a slow request is left alone", out.vx, 0.1)
+
+out = safety.filter(Velocity(vx=-1.0), WorldState(range_cm=-1.0, range_expected=True))
+check_eq("  and reversing is not a forward clearance question", out.vx, -1.0)
 
 # No sensor fitted at all is different again, and must not immobilise the car.
 out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=None, range_expected=False))

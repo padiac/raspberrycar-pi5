@@ -29,6 +29,22 @@ SLOW_CM = 80.0
 #: Speed still allowed at exactly STOP_CM, so the car creeps rather than
 #: slamming to a halt at the threshold.
 CREEP = 0.15
+#: Fastest the car may go with no echo coming back.
+#:
+#: A timed-out ping is not the same quality of information as a measurement,
+#: and in a house it usually is not "nothing within four metres" at all. Sound
+#: bounces off a pane of glass like light off a mirror: dead on it returns, at
+#: any angle it leaves and never comes back. A floor-to-ceiling window is
+#: therefore invisible from almost every approach, and so is a smooth wall met
+#: obliquely. Soft things -- curtains, a sofa -- swallow the pulse instead.
+#: All of them report exactly what an empty room reports.
+#:
+#: So it may drive, because refusing to cross open space would make the car
+#: useless, but only at a crawl. Set above the duty at which these motors
+#: actually start turning (measured at 0.16 forward, 0.20 rotating) so this is
+#: a slow car rather than a stalled one.
+NO_ECHO_CEILING = 0.22
+
 #: How old a forward reading may be and still describe where the car is.
 #:
 #: The head is on a servo, and there is more to look at than straight
@@ -126,6 +142,12 @@ class SafetyLayer:
                     if age is not None else "no range reading, forward blocked"
                 )
             vx = 0.0
+        elif vx > 0 and forward_reading and distance < 0:
+            # Heard nothing back. Could be an empty room; could equally be
+            # glass, or a wall at a glancing angle, or something soft.
+            if vx > NO_ECHO_CEILING:
+                reasons.append("nothing came back, creeping")
+                vx = NO_ECHO_CEILING
         elif vx > 0 and forward_reading and distance > 0:
             if distance < self.stop_cm:
                 reasons.append(f"obstacle {distance:.0f}cm ahead, forward blocked")

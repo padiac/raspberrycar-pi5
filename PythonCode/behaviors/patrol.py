@@ -243,30 +243,38 @@ class PatrolBehavior(Behavior):
         return self._decide(robot, now)
 
     def _decide(self, robot, now):
-        best = max(self.clearance, key=lambda a: (self.clearance[a], -abs(a)))
-        room = self.clearance[best]
-
-        if room < BOXED_IN_CM:
+        roomiest = max(self.clearance.values(), default=0.0)
+        if roomiest < BOXED_IN_CM:
             # Nowhere in front has room. Turning on the spot in a corner just
             # finds the same corner again, so back out and look afresh.
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
-                f"boxed in ({room:.0f}cm all round), backing out",
+                f"boxed in ({roomiest:.0f}cm all round), backing out",
             )
 
+        # Only somewhere else is a candidate. Straight ahead is where the car
+        # is already pointing and has just been refused, so "turn towards 0
+        # degrees" is not a manoeuvre -- it was measured anyway, because how
+        # blocked the front is tells a doorway from a wall.
+        #
+        # This used to fall out of a special case: pick the roomiest of all
+        # five, and if that came out as straight ahead, turn to a randomly
+        # chosen side. Which is how the car was seen turning towards 19cm of
+        # room with 400cm available on the other side -- the coin toss did not
+        # look at the numbers it was choosing between.
+        options = {a: cm for a, cm in self.clearance.items() if a != 0.0}
+        if not options:
+            return self._commit(
+                robot, now, Velocity(omega=self._guess(robot) * TURN_SPEED),
+                TURN_HOLD_MIN, "nowhere measured, guessing",
+            )
+
+        room = max(options.values())
         # A tie is real -- a corridor looks the same both ways -- so break it
         # randomly rather than always choosing the same side of it.
-        rivals = [a for a in self.clearance if self.clearance[a] > room - 5.0]
-        if len(rivals) > 1 and all(abs(a) > 0 for a in rivals):
-            best = random.choice(rivals)
-            room = self.clearance[best]
-
-        if best == 0.0:
-            # The sweep disagrees with the safety layer about straight ahead.
-            # Trust the safety layer, which is looking at a fresher reading,
-            # and turn away rather than driving at what it just refused.
-            best = random.choice((-90.0, 90.0))
-            room = self.clearance[best]
+        rivals = [a for a, cm in options.items() if cm > room - 5.0]
+        best = random.choice(rivals)
+        room = options[best]
 
         direction = 1.0 if best > 0 else -1.0
         hold = TURN_HOLD_MIN + (TURN_HOLD_MAX - TURN_HOLD_MIN) * (abs(best) / 90.0)
