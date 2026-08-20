@@ -553,6 +553,12 @@ class Robot:
                 if self.drivetrain else None
             ),
             "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
+            # What the safety layer actually judges on, which is not always
+            # what the head happens to be pointing at this instant.
+            "forward_cm": (None if world.forward_cm is None
+                           else round(world.forward_cm, 1)),
+            "forward_age": (None if world.forward_age is None
+                            else round(world.forward_age, 2)),
             "pan": self.pan.status() if self.pan else None,
             "clip": self.clips.status() if self.clips else None,
             "gamepad": self.gamepad.status() if self.gamepad else None,
