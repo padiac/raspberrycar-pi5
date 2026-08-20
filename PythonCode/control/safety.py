@@ -29,6 +29,20 @@ SLOW_CM = 80.0
 #: Speed still allowed at exactly STOP_CM, so the car creeps rather than
 #: slamming to a halt at the threshold.
 CREEP = 0.15
+#: How old a forward reading may be and still describe where the car is.
+#:
+#: The head is on a servo, and there is more to look at than straight
+#: ahead: a chair leg shows up as a single ten-degree spike in a sweep, so
+#: a car that only ever looks forward is blind to everything its corners
+#: are about to hit. Requiring the head to be forward *at this instant*
+#: made glancing sideways cost a full stop, which meant it never happened.
+#:
+#: The bound is what makes this safe rather than convenient. Approaching
+#: an obstacle the car was measured at 2 to 3 cm/s, because this layer is
+#: already throttling it there, so a second-old reading is wrong by about
+#: three centimetres against a stopping distance of twenty. Anything older
+#: than this is treated exactly as it was before: no reading, no forward.
+FORWARD_MEMORY_S = 1.0
 
 
 @dataclass
@@ -79,11 +93,16 @@ class SafetyLayer:
         # -- forward clearance, from the ultrasonic ------------------------
         # Only ever limits *forward* motion: reversing away from a wall in
         # front must stay possible, or the car can trap itself.
-        distance = world.range_cm
-        # A distance is only a *forward* clearance if the head was pointing
-        # forward when it was taken. The sensor sits on a servo, so that is a
-        # question with an answer rather than something to assume.
-        forward_reading = distance is not None and world.range_forward
+        # Not whatever the head is pointing at now -- the most recent thing it
+        # saw while pointing forward, provided that was recent enough to still
+        # be true. The head is allowed to look away; it is not allowed to look
+        # away for long.
+        distance = world.forward_cm
+        forward_reading = (
+            distance is not None
+            and world.forward_age is not None
+            and world.forward_age <= FORWARD_MEMORY_S
+        )
 
         if vx > 0 and world.range_expected and not forward_reading:
             # Three ways to have no forward reading and one correct response.
@@ -92,10 +111,20 @@ class SafetyLayer:
             # used to read as one: a miss came back as the last good value, or
             # as zero before there had been a good one, and zero fails the
             # `> 0` test below, so the whole check was skipped.
-            reasons.append(
-                "sensor not looking ahead, forward blocked" if distance is not None
-                else "no range reading, forward blocked"
-            )
+            # Which of the two it is matters to whoever is reading this. A
+            # stale reading means the head is busy elsewhere and will be back;
+            # no reading at all means the sensor is not answering, and the
+            # difference is a glance versus a fault. Reporting the age says so
+            # without having to guess: the last value hangs around after the
+            # sensor stops answering, so its mere existence proves nothing.
+            if world.forward_cm is None:
+                reasons.append("no range reading, forward blocked")
+            else:
+                age = world.forward_age
+                reasons.append(
+                    "last look ahead was %.1fs ago, forward blocked" % age
+                    if age is not None else "no range reading, forward blocked"
+                )
             vx = 0.0
         elif vx > 0 and forward_reading and distance > 0:
             if distance < self.stop_cm:

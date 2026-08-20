@@ -71,6 +71,23 @@ class RangeFinder:
         return self.average_cm
 
 
+#: Nothing but "no echo", from every direction, for this long. A room does
+#: not do that: turn a working sensor through a full circle in a house and
+#: something comes back. What does do it is the sensor losing power, and the
+#: way this car is wired that is what happens first as the battery goes down
+#: -- the motors take 7.4V directly and merely slow, while the ultrasonic runs
+#: off a buck that drops out of regulation around 6.5V in and stops answering.
+#:
+#: The reason this cannot be left as "clear" is the direction the mistake goes
+#: in. A timed-out ping means open road, so a flat battery reads as permission
+#: to drive, and the car gets blinder and more confident at the same time. It
+#: was observed doing exactly that for 28 seconds.
+#:
+#: Generous, because a large empty room is a real thing and stopping is a real
+#: cost. Eight seconds of hearing nothing at all is not that room.
+DEAF_AFTER_S = 8.0
+
+
 class SerialRangeFinder:
     """Distance as reported by the ESP32.
 
@@ -83,6 +100,10 @@ class SerialRangeFinder:
     def __init__(self, link):
         self.link = link
         self.average_cm = None
+        #: When something last came back. Starts now, so a car switched on
+        #: in the middle of a hall gets its grace period like anyone else.
+        self.last_echo = time.monotonic()
+        self.deaf = False
 
     def read_cm(self):
         """Distance in cm, negative for nothing within range, None for no idea.
@@ -123,7 +144,19 @@ class SerialRangeFinder:
             return None
         if current < 0:
             self.average_cm = None      # nothing to average towards
+            if time.monotonic() - self.last_echo > DEAF_AFTER_S:
+                if not self.deaf:
+                    self.deaf = True
+                    print("[range] nothing has come back for "
+                          f"{DEAF_AFTER_S:.0f}s; treating the sensor as "
+                          "unreliable rather than the road as clear",
+                          flush=True)
+                return None             # unknown, not clear
             return current
+        self.last_echo = time.monotonic()
+        if self.deaf:
+            self.deaf = False
+            print("[range] hearing again", flush=True)
         if self.average_cm is None:
             self.average_cm = current
         else:

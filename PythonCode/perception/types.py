@@ -57,8 +57,29 @@ class WorldState:
                                         # off forward, positive right
     range_forward: bool = True          # was that near enough to straight
                                         # ahead to count as clearance?
+    forward_cm: float = None            # the most recent reading that WAS
+                                        # taken looking forward
+    forward_age: float = None           # how many seconds ago, or None if
+                                        # there has never been one
     proximity: Proximity = None         # side infrared
     floor: Floor = None                 # downward line sensors
+
+    def __post_init__(self):
+        """Fill in the forward reading when the caller only gave a range.
+
+        A world built by hand -- in a test, or by a chassis with no servo to
+        point anywhere else -- says how far away something is and nothing
+        about where the head was, because there was only one place it could
+        have been. Reading that as "has never seen anything forward" switches
+        the whole clearance check off without a word, which is the same shape
+        of mistake as the one where a timed-out ping and a silent board became
+        the same value. Two fields that nearly mean the same thing want the
+        near case handled here, once, rather than remembered everywhere.
+        """
+        if (self.forward_cm is None and self.range_forward
+                and self.range_cm is not None):
+            self.forward_cm = self.range_cm
+            self.forward_age = 0.0
 
     # -- convenience the behaviours would otherwise all reimplement ---------
 

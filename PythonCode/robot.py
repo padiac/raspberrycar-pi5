@@ -146,6 +146,14 @@ class Robot:
         self.behavior = self.behaviors["idle"]
         self._attach_overlay()
 
+        #: The last distance measured while the head was actually pointing
+        #: forward, and when. Kept because the head is on a servo and has
+        #: reasons to look elsewhere -- and a reading taken a fraction of a
+        #: second ago still describes where the car is, at the speeds this
+        #: thing travels. Measured creeping toward a wall: 2 to 3 cm/s.
+        self._forward_cm = None
+        self._forward_at = 0.0
+
         self.last_activity = time.monotonic()
         #: True only when *this* turned the camera off. Someone who switched
         #: it off by hand has made a decision, and waking it up for them
@@ -456,10 +464,19 @@ class Robot:
             except Exception:  # noqa: BLE001
                 pass
 
+        looking_forward = self.pan.looking_forward if self.pan else True
+        if looking_forward and range_cm is not None:
+            self._forward_cm = range_cm
+            self._forward_at = time.monotonic()
+        forward_age = (time.monotonic() - self._forward_at
+                       if self._forward_at else None)
+
         return WorldState(
             dt=dt, frame=frame, frame_size=size, detections=detections,
             range_cm=range_cm, proximity=proximity, floor=floor,
             range_expected=self.rangefinder is not None,
+            forward_cm=self._forward_cm,
+            forward_age=forward_age,
             # A distance without a direction is half a measurement. With no
             # servo fitted the head cannot be anywhere but forward, so that
             # is the honest default rather than a convenient one.

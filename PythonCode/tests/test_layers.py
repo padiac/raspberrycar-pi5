@@ -122,6 +122,38 @@ check_eq("obstacle left: strafe right allowed", out.vy, 1.0)
 out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(left=True, right=True)))
 check_eq("boxed in: forward blocked", out.vx, 0.0)
 
+print("\nthe head may look away, but not for long")
+# The head is on a servo and has reasons to look elsewhere -- a chair leg is a
+# single ten-degree spike, invisible to a car that only ever stares ahead. So
+# the layer accepts the last reading taken while forward, if it is recent.
+# "Recent" is the whole of the safety argument: at the 2-3 cm/s this car
+# approaches things, a second-old reading is wrong by about three centimetres
+# against a stopping distance of twenty.
+out = safety.filter(Velocity(vx=1.0), WorldState(
+    range_cm=8.0, range_forward=False,          # head is off to one side
+    forward_cm=100.0, forward_age=0.2,          # but it saw clear road just now
+    range_expected=True))
+check_eq("glancing aside: drives on the reading it just took", out.vx, 1.0)
+
+out = safety.filter(Velocity(vx=1.0), WorldState(
+    range_cm=100.0, range_forward=False,
+    forward_cm=10.0, forward_age=0.2,           # and it saw a wall just now
+    range_expected=True))
+check_eq("  and still stops for what that reading said", out.vx, 0.0)
+
+out = safety.filter(Velocity(vx=1.0), WorldState(
+    range_cm=100.0, range_forward=False,
+    forward_cm=100.0, forward_age=5.0,          # last looked forward ages ago
+    range_expected=True))
+check_eq("looked away too long: forward blocked", out.vx, 0.0)
+
+out = safety.filter(Velocity(vx=-1.0), WorldState(
+    range_cm=100.0, range_forward=False,
+    forward_cm=100.0, forward_age=5.0,
+    range_expected=True))
+check_eq("  but reversing out of it is still allowed", out.vx, -1.0)
+
+
 print("\na sensor that has gone quiet is a fault, not open road")
 # Three states that used to look alike. A missed reading came back as the last
 # good value, or as zero before there had been one, and zero fails the layer's

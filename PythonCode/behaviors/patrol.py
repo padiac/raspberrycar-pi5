@@ -51,6 +51,36 @@ TURN_HOLD_MAX = 1.1
 #: Below this everywhere, there is nowhere forwards worth going and the car
 #: backs out instead of turning on the spot inside a corner.
 BOXED_IN_CM = 35.0
+
+# -- looking around while driving ------------------------------------------
+#
+# The sweep above only happens once the way ahead is already blocked, which
+# means that while actually driving the car stares at one direction and knows
+# nothing about the rest of the room. That is how it collects chair legs: a
+# leg shows up in a sweep as a single ten-degree spike -- 45cm with 84 and 118
+# either side of it -- so it is perfectly visible, and completely invisible
+# unless the head happens to be pointed at it. The corners of the chassis are
+# wider than the beam.
+#
+# So the head glances left and right as it goes. The safety layer allows this
+# because it now accepts a recent forward reading rather than demanding a
+# current one; the glance has to be short enough to stay inside that window,
+# which is what GLANCE_DWELL and the return to centre are for.
+
+#: How often to look away from straight ahead while cruising.
+GLANCE_EVERY_S = 1.8
+#: How far to the side, and how long to hold it there. Long enough for the
+#: servo to arrive and the sensor to ping, short enough that the forward
+#: reading has not gone stale by the time the head is back.
+GLANCE_ANGLE = 40.0
+GLANCE_DWELL = 0.35
+#: Something this close beside the car is worth steering away from, even
+#: though nothing is blocking the way ahead. This is intent, not safety: the
+#: safety layer only ever removes motion, and turning away is adding some.
+SIDE_ALERT_CM = 30.0
+#: How hard to lean away from it. Gentle -- the car is still going forwards,
+#: and this is a nudge around a table leg rather than a change of plan.
+SIDE_AVOID_TURN = 0.35
 REVERSE_SPEED = 0.5
 REVERSE_HOLD = 0.7
 
@@ -67,6 +97,10 @@ class PatrolBehavior(Behavior):
         self.blocked_since = None
         self.scan = None            # index into SCAN_ANGLES, and when to read
         self.clearance = {}
+        self.glance = None          # (angle, when to read it)
+        self.glance_next = 0.0      # when to look away again
+        self.glance_side = 1.0      # alternates, so both sides get looked at
+        self.sides = {}             # last thing seen to each side
         self.state = "idle"
 
     def start(self, robot):
@@ -75,6 +109,9 @@ class PatrolBehavior(Behavior):
         self.blocked_since = None
         self.scan = None
         self.clearance = {}
+        self.glance = None
+        self.glance_next = 0.0
+        self.sides = {}
         if robot.pan:
             robot.pan.centre()
 
@@ -109,8 +146,57 @@ class PatrolBehavior(Behavior):
         else:
             self.blocked_since = None
 
-        self.state = "cruising"
-        return Velocity(vx=CRUISE)
+        return self._cruise(robot, world, now)
+
+    # -- driving along, looking around -------------------------------------
+
+    def _cruise(self, robot, world, now):
+        """Drive forward, glancing sideways, leaning away from what is there."""
+        if robot.pan is not None:
+            self._glance(robot, world, now)
+
+        # Steer away from the nearer side, if either is close enough to matter.
+        # Both being close is a gap, not an obstacle, and steering out of a gap
+        # is how you hit the other side of it.
+        left = self.sides.get(-1, 999.0)
+        right = self.sides.get(1, 999.0)
+        omega = 0.0
+        note = ""
+        if min(left, right) < SIDE_ALERT_CM and abs(left - right) > 8.0:
+            away = 1.0 if left < right else -1.0
+            omega = away * SIDE_AVOID_TURN
+            note = " | easing %s off %.0fcm" % (
+                "right" if away > 0 else "left", min(left, right))
+
+        aim = "" if not self.glance else " | looking %+.0f" % self.glance[0]
+        self.state = "cruising" + aim + note
+        return Velocity(vx=CRUISE, omega=omega)
+
+    def _glance(self, robot, world, now):
+        """Look aside briefly, then come straight back.
+
+        Coming back matters more than the looking. The safety layer will only
+        drive forward on a reading that is recent, so a head left pointing at
+        the scenery stops the car -- correctly, but uselessly.
+        """
+        if self.glance is not None:
+            angle, due = self.glance
+            if now < due:
+                return
+            reading = world.range_cm
+            self.sides[1 if angle > 0 else -1] = (
+                999.0 if reading is None or reading <= 0 else reading)
+            robot.pan.centre()
+            self.glance = None
+            self.glance_next = now + GLANCE_EVERY_S
+            return
+
+        if now < self.glance_next or not robot.pan.settled:
+            return
+        angle = GLANCE_ANGLE * self.glance_side
+        self.glance_side *= -1
+        robot.pan.look(angle)
+        self.glance = (angle, now + GLANCE_DWELL)
 
     # -- looking for somewhere to go ---------------------------------------
 
@@ -122,6 +208,7 @@ class PatrolBehavior(Behavior):
                 TURN_HOLD_MIN, "blocked, picking a way round",
             )
         self.clearance = {}
+        self.glance = None          # the sweep takes the head from here
         self.scan = (0, now + SCAN_DWELL)
         robot.pan.look(SCAN_ANGLES[0])
         self.state = "looking around"
@@ -235,4 +322,6 @@ class PatrolBehavior(Behavior):
         return {
             "state": self.state,
             "clearance": {str(int(k)): round(v) for k, v in self.clearance.items()},
+            "sides": {("left" if k < 0 else "right"): round(v)
+                      for k, v in self.sides.items() if v < 999},
         }
