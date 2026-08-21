@@ -136,6 +136,7 @@ class Robot:
                     "pan_by": self.pan_by,
                     "boost": self.set_boost,
                     "play_path": self.play_path,
+                    "toggle_clip": self.toggle_clip,
                     "slower": lambda: self.nudge_speed(-0.05),
                     "faster": lambda: self.nudge_speed(+0.05),
                     "pan_centre": self.pan_centre,
@@ -424,6 +425,14 @@ class Robot:
         """
         self.speed_limit = max(0.10, min(1.0, self.speed_limit + delta))
         return self.speed_limit
+
+    def toggle_clip(self):
+        """Start or stop recording video, from a button rather than the page."""
+        if self.clips is None:
+            return False, "no camera"
+        if self.clips.status()["recording"]:
+            return self.clips.stop()
+        return self.clips.start()
 
     def toggle_record(self):
         if self.recorder.recording:

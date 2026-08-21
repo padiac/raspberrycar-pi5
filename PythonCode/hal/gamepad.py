@@ -97,15 +97,24 @@ BUTTONS = [
     (("BTN_TR",), "faster", "R1", "Speed limit up"),
 ]
 
-#: The rest of it, which is not a button press and so cannot be a table lookup,
-#: but still has to be explained somewhere that cannot go stale.
+#: The d-pad, which reports as two axes and behaves as four buttons. Same
+#: shape as BUTTONS so the page can render them together, with the value the
+#: axis takes when that direction is pressed, and an argument for the action
+#: where it needs one.
+HATS = [
+    ("ABS_HAT0X", -1, "pan_by", -PAN_STEP, "D-pad left", "Swing the head 45 degrees left"),
+    ("ABS_HAT0X", 1, "pan_by", PAN_STEP, "D-pad right", "Swing the head 45 degrees right"),
+    ("ABS_HAT0Y", 1, "pan_centre", None, "D-pad down", "Head back to centre"),
+    ("ABS_HAT0Y", -1, "toggle_clip", None, "D-pad up", "Start or stop recording video"),
+]
+
+#: What is left: continuous, so not a lookup, but still in need of explaining
+#: somewhere that cannot go stale.
 AXES = [
     ("Left stick", "Drive: forward and back, and sideways on a mecanum chassis"),
     ("Right stick, left/right", "Turn"),
     ("L2", "Crawl -- squeezes the speed down to a fifth"),
     ("R2", "Lift the speed limit, for as long as it is held"),
-    ("D-pad left/right", "Swing the ultrasonic head 45 degrees"),
-    ("D-pad down", "Head back to centre"),
     ("Rumble", "How close the obstacle ahead is"),
 ]
 
@@ -113,7 +122,10 @@ AXES = [
 def describe():
     """The whole mapping, for anyone who has to explain it to a person."""
     return {
-        "buttons": [{"button": name, "does": what} for _, _, name, what in BUTTONS],
+        "buttons": ([{"button": name, "does": what}
+                     for _, _, name, what in BUTTONS]
+                    + [{"button": name, "does": what}
+                       for _, _, _, _, name, what in HATS]),
         "axes": [{"button": name, "does": what} for name, what in AXES],
     }
 
@@ -294,10 +306,13 @@ class Gamepad:
         self._hat[code] = value
         if value == 0:
             return
-        if code == ecodes.ABS_HAT0X:
-            self._do("pan_by", PAN_STEP * (1 if value > 0 else -1))
-        elif code == ecodes.ABS_HAT0Y and value > 0:   # down
-            self._do("pan_centre")
+        for axis, when, action, argument, _, _ in HATS:
+            if code == getattr(ecodes, axis, None) and value == when:
+                if argument is None:
+                    self._do(action)
+                else:
+                    self._do(action, argument)
+                return
 
     # -- rumble ------------------------------------------------------------
 

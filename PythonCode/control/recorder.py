@@ -50,7 +50,16 @@ class PathRecorder:
     # -- recording ---------------------------------------------------------
 
     def arm(self):
+        """Start recording a path, discarding whatever was recorded before.
+
+        Pressing record twice used to give one path with both drives in it,
+        played back end to end, which is not what anybody means by recording
+        something twice. A path is the drive you just did; keeping the previous
+        one would need somewhere to keep it and a way to choose between them,
+        and there is neither.
+        """
         with self.lock:
+            self.segments = []
             self.recording = True
             self._open, self._open_seconds = None, 0.0
         return self.status()
