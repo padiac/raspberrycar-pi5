@@ -60,11 +60,35 @@ CLEAR_CM = 400.0
 #: see, and not worth trying when there is real space elsewhere.
 UNKNOWN_CM = 70.0
 
+#: Clearance needed all round before turning on the spot.
+#:
+#: Every other manoeuvre is checked before it happens: the safety layer will
+#: not drive forward without a forward reading. Rotating is checked by nothing
+#: at all, and it is the one manoeuvre that moves parts of the car sideways --
+#: the front corners swing out through space the sensor has never pointed at,
+#: and the mecanum wheels stand proud of the chassis. So a turn decided while
+#: something sits a few centimetres off the bow connects with it, having been
+#: perfectly clear a moment earlier.
+#:
+#: Roughly the half-diagonal of the chassis. Anything closer than this in any
+#: swept direction means backing off first, which costs a second and is the
+#: difference between turning and grinding.
+TURN_CLEARANCE_CM = 16.0
+#: How long to back off for when there is not enough.
+MAKE_ROOM_S = 0.8
+
 #: Being blocked this many times inside this window means the ways out are not
 #: working. The classic case is a corner: every direction that looks open is a
 #: soft surface that is not, so each escape leads straight back.
+#:
+#: The window has to be short enough that ordinary patrolling does not fill it.
+#: Measured in a cluttered room, the car meets something every seven seconds or
+#: so, which at twenty-five seconds made "cornered" the normal state of affairs
+#: -- it used the escape manoeuvre twice as often as it made an ordinary
+#: decision. Twelve seconds means blocked at roughly twice the usual rate,
+#: which is a signal rather than a description.
 TRAPPED_BLOCKS = 3
-TRAPPED_WINDOW_S = 25.0
+TRAPPED_WINDOW_S = 12.0
 #: What to do about it. Back out much further than usual, then turn most of the
 #: way round -- the one direction that is certainly clear is where the car came
 #: from.
@@ -183,6 +207,18 @@ class PatrolBehavior(Behavior):
         if getattr(self, "follow", None):
             what, _ = self.follow
             self.follow = None
+            if what == "decide":
+                # Room made, so look again. Deciding on the sweep taken before
+                # the reverse is what the reverse was supposed to invalidate:
+                # the clearance that was too tight to turn in is still too
+                # tight in a map of where the car used to be, so it backs off,
+                # re-reads the same numbers, backs off again. Measured doing
+                # exactly that for 147 seconds.
+                #
+                # Sweeping again also counts as another block, which is what
+                # eventually escalates this to the escape manoeuvre rather than
+                # letting it repeat.
+                return self._start_looking(robot, now)
             if what == "turn_back":
                 return self._commit(
                     robot, now,
@@ -355,6 +391,10 @@ class PatrolBehavior(Behavior):
 
     def _decide(self, robot, now):
         """Choose a way out of wherever the sweep just found the car."""
+        profile = " ".join(
+            "%+d:%s" % (int(a), "?" if a in self.unknown else "%.0f" % self.clearance[a])
+            for a in sorted(self.clearance))
+
         if len(self.blocks) >= TRAPPED_BLOCKS:
             # Three sweeps inside half a minute means every way out chosen so
             # far has led straight back. Almost always a corner of soft things,
@@ -368,9 +408,15 @@ class PatrolBehavior(Behavior):
                 robot, now, Velocity(vx=-REVERSE_SPEED), TRAPPED_REVERSE_S,
                 "cornered -- backing right out", follow=("turn_back", now))
 
-        profile = " ".join(
-            "%+d:%s" % (int(a), "?" if a in self.unknown else "%.0f" % self.clearance[a])
-            for a in sorted(self.clearance))
+        # Nothing checks a rotation before it happens, so check it here. The
+        # sweep has just measured every direction the corners are about to
+        # swing through, which is the one moment this is knowable.
+        tightest = min(self.clearance.values(), default=999.0)
+        if tightest < TURN_CLEARANCE_CM:
+            return self._commit(
+                robot, now, Velocity(vx=-REVERSE_SPEED), MAKE_ROOM_S,
+                f"only {tightest:.0f}cm to turn in, backing off first | {profile}",
+                follow=("decide", now))
 
         roomiest = max(self.clearance.values(), default=0.0)
         if roomiest < BOXED_IN_CM:
