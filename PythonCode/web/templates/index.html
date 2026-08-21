@@ -552,10 +552,10 @@
   </div>
 
   <div class="row" style="margin-top:14px">
-    <label>speed</label><span class="val" id="speedval">15%</span>
+    <label>speed</label><span class="val" id="speedval">40%</span>
     <!-- Starts low. The car is quick enough to pull its own USB lead out, and
          a tethered first drive is the normal case, not the exception. -->
-    <input type="range" id="speed" min="5" max="100" value="15">
+    <input type="range" id="speed" min="5" max="100" value="40">
   </div>
   <div class="row">
     <label>chassis</label>
@@ -676,7 +676,19 @@ let detections = [], currentTarget = null;
 speed.oninput = () => $('speedval').textContent = speed.value + '%';
 // The limit lives on the robot, so it governs patrol and follow as well as
 // the pad. Sent on change rather than on input: dragging fires continuously.
+// The robot owns the speed limit; this page reads it and only writes it when
+// somebody moves the slider. Sending this file's own value on load is what it
+// used to do, and it meant the number written here overwrote the robot's on
+// every single page load -- so changing the default on the robot appeared to
+// do nothing, because it survived about a second.
 const sendSpeed = () => post('/api/speed', {limit: speed.value / 100});
+let speedSynced = false;
+function renderSpeed(limit) {
+  if (speedSynced || limit == null) return;
+  speedSynced = true;
+  speed.value = Math.round(limit * 100);
+  $('speedval').textContent = speed.value + '%';
+}
 
 // ---- where the ultrasonic is looking ------------------------------------
 const aimText = v => v === 0 ? 'forward'
@@ -710,7 +722,6 @@ function renderPan(p) {
   $('panaim').textContent = p.settled ? aimText(p.angle) : 'moving\u2026';
 }
 speed.onchange = sendSpeed;
-sendSpeed();
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // ---- theme --------------------------------------------------------------
@@ -1227,6 +1238,7 @@ async function telemetry() {
     renderPan(d.pan);
     renderGamepad(d.gamepad);
     renderIdle(d.idle);
+    renderSpeed(d.speed_limit);
     renderSupply(d.supply);
     if (d.clip) { renderClipState(d.clip); if (d.clip.recording) clipTick(); }
 
