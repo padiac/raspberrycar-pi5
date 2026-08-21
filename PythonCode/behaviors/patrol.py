@@ -78,9 +78,19 @@ GLANCE_DWELL = 0.35
 #: though nothing is blocking the way ahead. This is intent, not safety: the
 #: safety layer only ever removes motion, and turning away is adding some.
 SIDE_ALERT_CM = 30.0
-#: How hard to lean away from it. Gentle -- the car is still going forwards,
-#: and this is a nudge around a table leg rather than a change of plan.
+#: And this close is past leaning away from. At a few centimetres the car is
+#: already scraping along whatever it is, and continuing forward while curving
+#: gently is how it stays there -- observed doing exactly that against a wall
+#: for 25 seconds, announcing an avoidance that never happened.
+SIDE_CLOSE_CM = 15.0
+#: How hard to lean away. Raised to whatever actually turns this car before it
+#: is used; see _enough_to_turn.
 SIDE_AVOID_TURN = 0.35
+SIDE_TURN_HOLD = 0.5
+#: Side readings are taken while moving, so they describe somewhere the car
+#: used to be. After this long the thing measured is behind it, and steering
+#: away from it means steering into whatever is actually there now.
+SIDE_MEMORY_S = 3.0
 REVERSE_SPEED = 0.5
 REVERSE_HOLD = 0.7
 
@@ -100,7 +110,7 @@ class PatrolBehavior(Behavior):
         self.glance = None          # (angle, when to read it)
         self.glance_next = 0.0      # when to look away again
         self.glance_side = 1.0      # alternates, so both sides get looked at
-        self.sides = {}             # last thing seen to each side
+        self.sides = {}             # side -> (cm, when it was measured)
         self.state = "idle"
 
     def start(self, robot):
@@ -155,22 +165,65 @@ class PatrolBehavior(Behavior):
         if robot.pan is not None:
             self._glance(robot, world, now)
 
-        # Steer away from the nearer side, if either is close enough to matter.
-        # Both being close is a gap, not an obstacle, and steering out of a gap
-        # is how you hit the other side of it.
-        left = self.sides.get(-1, 999.0)
-        right = self.sides.get(1, 999.0)
+        # Steer away from the nearer side, if either is close enough to matter
+        # and was seen recently enough to still be beside the car. Both being
+        # close is a gap, not an obstacle, and steering out of a gap is how you
+        # hit the other side of it.
+        left = self._side(-1, now)
+        right = self._side(1, now)
+        nearest = min(left, right)
         omega = 0.0
         note = ""
-        if min(left, right) < SIDE_ALERT_CM and abs(left - right) > 8.0:
+        if nearest < SIDE_ALERT_CM and abs(left - right) > 8.0:
             away = 1.0 if left < right else -1.0
-            omega = away * SIDE_AVOID_TURN
-            note = " | easing %s off %.0fcm" % (
-                "right" if away > 0 else "left", min(left, right))
+            side = "right" if away > 0 else "left"
+            if nearest < SIDE_CLOSE_CM:
+                # Too close to lean away from while still driving at it. Stop
+                # going forward and turn, the same as being blocked -- which
+                # this is, just not in the direction the safety layer watches.
+                self.sides = {}
+                return self._commit(
+                    robot, now, Velocity(omega=away * self._enough(robot, TURN_SPEED)),
+                    SIDE_TURN_HOLD,
+                    "%.0fcm to the %s, turning away" % (
+                        nearest, "left" if away > 0 else "right"),
+                )
+            omega = away * self._enough(robot, SIDE_AVOID_TURN)
+            note = " | easing %s off %.0fcm" % (side, nearest)
 
         aim = "" if not self.glance else " | looking %+.0f" % self.glance[0]
         self.state = "cruising" + aim + note
         return Velocity(vx=CRUISE, omega=omega)
+
+    def _side(self, which, now):
+        """How far away the last thing seen on that side was, if still relevant."""
+        seen = self.sides.get(which)
+        if seen is None or now - seen[1] > SIDE_MEMORY_S:
+            return 999.0
+        return seen[0]
+
+    def _enough(self, robot, magnitude):
+        """Raise a turn to something that will actually rotate the car.
+
+        Below a measured duty these motors do not turn the chassis at all --
+        rotating in place fights the rollers on all four wheels, and it costs
+        more than driving straight. So a turn command under that floor is not
+        a gentler turn, it is no turn, and asking for one produces a behaviour
+        convinced it manoeuvred and a car that did not move. That is exactly
+        what a 0.35 side-avoidance did at every speed limit worth using: 0.12
+        of duty against a floor of 0.20.
+
+        Raising it does not spend what the speed limit was protecting. The
+        limit is about how fast the car crosses a room; a turn in place
+        crosses nothing.
+
+        With no measured floor -- nobody has run the calibration -- this does
+        nothing, which is the same behaviour as before it existed.
+        """
+        floor = robot.calibration.get("turn_floor") if robot.calibration else 0.0
+        if not floor:
+            return magnitude
+        return min(1.0, max(magnitude, floor / max(robot.speed_limit, 1e-6)))
 
     def _glance(self, robot, world, now):
         """Look aside briefly, then come straight back.
@@ -185,7 +238,7 @@ class PatrolBehavior(Behavior):
                 return
             reading = world.range_cm
             self.sides[1 if angle > 0 else -1] = (
-                999.0 if reading is None or reading <= 0 else reading)
+                999.0 if reading is None or reading <= 0 else reading, now)
             robot.pan.centre()
             self.glance = None
             self.glance_next = now + GLANCE_EVERY_S
@@ -204,7 +257,8 @@ class PatrolBehavior(Behavior):
         """Begin the sweep, or fall back on a guess with no head to sweep."""
         if robot.pan is None:
             return self._commit(
-                robot, now, Velocity(omega=self._guess(robot) * TURN_SPEED),
+                robot, now,
+                Velocity(omega=self._guess(robot) * self._enough(robot, TURN_SPEED)),
                 TURN_HOLD_MIN, "blocked, picking a way round",
             )
         self.clearance = {}
@@ -265,7 +319,8 @@ class PatrolBehavior(Behavior):
         options = {a: cm for a, cm in self.clearance.items() if a != 0.0}
         if not options:
             return self._commit(
-                robot, now, Velocity(omega=self._guess(robot) * TURN_SPEED),
+                robot, now,
+                Velocity(omega=self._guess(robot) * self._enough(robot, TURN_SPEED)),
                 TURN_HOLD_MIN, "nowhere measured, guessing",
             )
 
@@ -282,7 +337,8 @@ class PatrolBehavior(Behavior):
             f"{int(a):+d}:{self.clearance[a]:.0f}" for a in sorted(self.clearance)
         )
         return self._commit(
-            robot, now, Velocity(omega=direction * TURN_SPEED), hold,
+            robot, now,
+            Velocity(omega=direction * self._enough(robot, TURN_SPEED)), hold,
             f"most room {self._name(best)} ({room:.0f}cm) | {profile}",
         )
 
@@ -330,6 +386,6 @@ class PatrolBehavior(Behavior):
         return {
             "state": self.state,
             "clearance": {str(int(k)): round(v) for k, v in self.clearance.items()},
-            "sides": {("left" if k < 0 else "right"): round(v)
-                      for k, v in self.sides.items() if v < 999},
+            "sides": {("left" if k < 0 else "right"): round(cm)
+                      for k, (cm, _) in self.sides.items() if cm < 999},
         }
