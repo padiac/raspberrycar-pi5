@@ -158,6 +158,12 @@
   .chip.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); }
   .chip.bad  { background: var(--bad-soft);  border-color: color-mix(in srgb, var(--bad) 38%, transparent);  color: var(--bad); }
 
+  #help {
+    order: 8; flex: none; width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+    font-size: 15px; font-weight: 700;
+  }
+  #help:hover { color: var(--text); border-color: var(--line-firm); }
   #theme {
     order: 8; flex: none; width: 34px; height: 34px; border-radius: 50%; font-size: 15px;
     display: grid; place-items: center; background: var(--surface);
@@ -407,6 +413,38 @@
   .clip button { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
   .clip.busy { opacity: .6; }
 
+  /* ── reference sheet ────────────────────────────────────────────── */
+  #sheet {
+    position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-start;
+    justify-content: center; padding: 24px 14px calc(24px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    backdrop-filter: blur(10px); overflow-y: auto;
+  }
+  .sheetbox {
+    width: 100%; max-width: 640px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--r-lg);
+    box-shadow: var(--sh-lg); padding: 18px 18px 22px;
+  }
+  .sheethead { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .sheethead h2 { margin: 0; flex: 1; }
+  #sheetclose {
+    padding: 7px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 650;
+    border: 1px solid var(--line-firm); background: var(--surface); color: var(--text);
+  }
+  #sheetbody h3 {
+    margin: 20px 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .sheetrow {
+    display: grid; grid-template-columns: 128px 1fr; gap: 12px;
+    padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px;
+  }
+  .sheetrow b { font-weight: 650; }
+  .sheetrow span { color: var(--muted); }
+  .sheetrow.off b, .sheetrow.off span { opacity: .45; }
+  .sheetnote { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  @media (max-width: 480px) { .sheetrow { grid-template-columns: 104px 1fr; } }
+
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm);
          overflow: hidden; background: var(--surface); }
   .seg button {
@@ -463,6 +501,7 @@
   <span class="chip warn" id="aimchip" hidden>sensor turned away</span>
   <span class="chip" id="idlechip" hidden>camera asleep</span>
   <span class="chip bad" id="powerchip" hidden>power</span>
+  <button id="help" title="What the controls do">?</button>
   <button id="theme" title="Switch theme">◐</button>
   <button id="estop">STOP</button>
 </div>
@@ -1318,7 +1357,67 @@ function renderSupply(s) {
   }
 }
 
+// ---- the reference sheet ------------------------------------------------
+// Built from what the robot reports rather than written out here: the button
+// map comes from the same table the controller reader dispatches on, and the
+// behaviours from the same list that decides which ones you are allowed to
+// select. Neither can describe something that is not there.
+function rows(items, dim) {
+  return items.map(i => '<div class="sheetrow' + (dim && dim(i) ? ' off' : '') + '">'
+    + '<b>' + esc(i.button || i.label) + '</b>'
+    + '<span>' + esc(i.does || i.description)
+    + (i.missing && i.missing.length
+        ? ' — needs ' + esc(i.missing.join(', ')) : '')
+    + '</span></div>').join('');
+}
+
+async function openSheet() {
+  $('sheet').hidden = false;
+  const body = $('sheetbody');
+  body.innerHTML = '<p class="sheetnote">loading…</p>';
+  const [controls, behaviours] = await Promise.all([
+    fetch('/api/controls').then(r => r.json()).catch(() => null),
+    fetch('/api/behaviors').then(r => r.json()).catch(() => null),
+  ]);
+
+  let html = '';
+  if (controls) {
+    html += '<h3>Controller — sticks and triggers</h3>' + rows(controls.axes);
+    html += '<h3>Controller — buttons</h3>' + rows(controls.buttons);
+  }
+  html += '<h3>Keyboard</h3>' + rows([
+    {button: 'W A S D', does: 'Drive and turn'},
+    {button: 'Q E', does: 'Slide sideways'},
+    {button: 'Space', does: 'Stop'},
+  ]);
+  if (behaviours) {
+    html += '<h3>Behaviours</h3>'
+      + rows(behaviours.behaviors, b => b.missing && b.missing.length);
+  }
+  html += '<p class="sheetnote">Anything greyed out is missing a piece of '
+       + 'hardware, not switched off. The controller pairs to the robot itself, '
+       + 'not to this phone — the browser cannot see a gamepad over plain HTTP.'
+       + '</p>';
+  body.innerHTML = html;
+}
+
+$('help').onclick = openSheet;
+$('sheetclose').onclick = () => $('sheet').hidden = true;
+$('sheet').onclick = e => { if (e.target === $('sheet')) $('sheet').hidden = true; };
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') $('sheet').hidden = true;
+});
+
 setInterval(telemetry, 500);
 </script>
+<div id="sheet" hidden>
+  <div class="sheetbox">
+    <div class="sheethead">
+      <h2>Controls</h2>
+      <button id="sheetclose">Close</button>
+    </div>
+    <div id="sheetbody"></div>
+  </div>
+</div>
 </body>
 </html>

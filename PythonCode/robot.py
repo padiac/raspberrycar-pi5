@@ -135,6 +135,9 @@ class Robot:
                     "toggle_record": self.toggle_record,
                     "pan_by": self.pan_by,
                     "boost": self.set_boost,
+                    "play_path": self.play_path,
+                    "slower": lambda: self.nudge_speed(-0.05),
+                    "faster": lambda: self.nudge_speed(+0.05),
                     "pan_centre": self.pan_centre,
                 },
                 # A callable, not a value: the chassis can be swapped at
@@ -404,6 +407,23 @@ class Robot:
         except ValueError:
             index = -1
         return self.select(names[(index + 1) % len(names)])
+
+    def play_path(self):
+        """Drive the recorded route back. Nothing recorded, nothing happens."""
+        self.recorder.disarm()
+        if not self.recorder.segments:
+            return False, "nothing recorded"
+        return self.select("replay")
+
+    def nudge_speed(self, delta):
+        """Move the speed limit, from a controller that cannot reach the slider.
+
+        Floored well above nothing: the limit multiplies every request, and
+        below the duty these motors turn at, lowering it further does not make
+        a slower car, it makes a stopped one.
+        """
+        self.speed_limit = max(0.10, min(1.0, self.speed_limit + delta))
+        return self.speed_limit
 
     def toggle_record(self):
         if self.recorder.recording:

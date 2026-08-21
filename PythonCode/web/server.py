@@ -161,6 +161,18 @@ def api_stop():
 # -- behaviours ------------------------------------------------------------
 
 
+@app.route("/api/controls")
+def api_controls():
+    """What the controller's buttons do.
+
+    Served from the same table the reader dispatches on, so the help on
+    the page cannot describe a binding that is not there, or miss one
+    that is.
+    """
+    from hal.gamepad import describe
+    return jsonify(**describe())
+
+
 @app.route("/api/behaviors")
 def api_behaviors():
     return jsonify(behaviors=robot.behavior_list(), active=robot.behavior.name)

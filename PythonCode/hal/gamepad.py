@@ -69,6 +69,47 @@ RUMBLE_PERIOD_S = 0.4
 RUMBLE_EPSILON = 0.12
 
 
+#: What the buttons do, and what to call them.
+#:
+#: A table rather than a chain of elif, because it is also the answer to "what
+#: do the buttons do" -- the page reads this and renders it, so the help cannot
+#: drift from the behaviour the way a written list does. Adding a binding here
+#: adds it to both.
+#:
+#: Several codes per row: the same physical button is BTN_SOUTH under one
+#: driver and BTN_A under another, and a DualSense reports differently again
+#: depending on which kernel picked it up.
+BUTTONS = [
+    (("BTN_EAST", "BTN_B"), "stop", "Circle", "Stop everything"),
+    (("BTN_NORTH", "BTN_Y"), "manual", "Triangle", "Back to driving by hand"),
+    (("BTN_WEST", "BTN_X"), "play_path", "Square", "Replay the recorded path"),
+    (("BTN_SOUTH", "BTN_A"), "toggle_record", "Cross", "Start or stop recording a path"),
+    (("BTN_START", "BTN_SELECT"), "cycle_behavior", "Options", "Next behaviour"),
+    (("BTN_TL",), "slower", "L1", "Speed limit down"),
+    (("BTN_TR",), "faster", "R1", "Speed limit up"),
+]
+
+#: The rest of it, which is not a button press and so cannot be a table lookup,
+#: but still has to be explained somewhere that cannot go stale.
+AXES = [
+    ("Left stick", "Drive: forward and back, and sideways on a mecanum chassis"),
+    ("Right stick, left/right", "Turn"),
+    ("L2", "Crawl -- squeezes the speed down to a fifth"),
+    ("R2", "Lift the speed limit, for as long as it is held"),
+    ("D-pad left/right", "Swing the ultrasonic head 45 degrees"),
+    ("D-pad down", "Head back to centre"),
+    ("Rumble", "How close the obstacle ahead is"),
+]
+
+
+def describe():
+    """The whole mapping, for anyone who has to explain it to a person."""
+    return {
+        "buttons": [{"button": name, "does": what} for _, _, name, what in BUTTONS],
+        "axes": [{"button": name, "does": what} for name, what in AXES],
+    }
+
+
 def _looks_like_a_pad(device):
     caps = device.capabilities()
     axes = {code for code, _ in caps.get(ecodes.EV_ABS, [])}
@@ -203,14 +244,10 @@ class Gamepad:
             print(f"[gamepad] {name}: {exc}", flush=True)
 
     def _button(self, code):
-        if code in (ecodes.BTN_EAST, ecodes.BTN_B):
-            self._do("stop")
-        elif code in (ecodes.BTN_NORTH, ecodes.BTN_Y):
-            self._do("manual")
-        elif code in (ecodes.BTN_START, ecodes.BTN_SELECT):
-            self._do("cycle_behavior")
-        elif code in (ecodes.BTN_SOUTH, ecodes.BTN_A):
-            self._do("toggle_record")
+        for names, action, _, _ in BUTTONS:
+            if code in {getattr(ecodes, n) for n in names if hasattr(ecodes, n)}:
+                self._do(action)
+                return
 
     def _hat_moved(self, code, value):
         """The D-pad reports as an axis, but it is a set of buttons.
