@@ -76,15 +76,23 @@ RUMBLE_EPSILON = 0.12
 #: drift from the behaviour the way a written list does. Adding a binding here
 #: adds it to both.
 #:
-#: Several codes per row: the same physical button is BTN_SOUTH under one
-#: driver and BTN_A under another, and a DualSense reports differently again
-#: depending on which kernel picked it up.
+#: One code per button, and it has to be the compass name.
+#:
+#: The letter names in linux/input-event-codes.h are not the aliases they look
+#: like. BTN_X is BTN_NORTH and BTN_Y is BTN_WEST -- so listing NORTH and Y
+#: together, as a defensive pair covering one button under two drivers, claims
+#: two different buttons instead. Written that way, Triangle and Square both
+#: matched the first row that mentioned either, first-match-wins gave both to
+#: "back to manual", and Square's replay never once fired. It looked like the
+#: recording had never worked; recording was fine and nothing was asking to
+#: play it.
 BUTTONS = [
-    (("BTN_EAST", "BTN_B"), "stop", "Circle", "Stop everything"),
-    (("BTN_NORTH", "BTN_Y"), "manual", "Triangle", "Back to driving by hand"),
-    (("BTN_WEST", "BTN_X"), "play_path", "Square", "Replay the recorded path"),
-    (("BTN_SOUTH", "BTN_A"), "toggle_record", "Cross", "Start or stop recording a path"),
-    (("BTN_START", "BTN_SELECT"), "cycle_behavior", "Options", "Next behaviour"),
+    (("BTN_EAST",), "stop", "Circle", "Stop everything"),
+    (("BTN_NORTH",), "manual", "Triangle", "Back to driving by hand"),
+    (("BTN_WEST",), "play_path", "Square", "Replay the recorded path"),
+    (("BTN_SOUTH",), "toggle_record", "Cross", "Start or stop recording a path"),
+    (("BTN_START",), "cycle_behavior", "Options", "Next behaviour"),
+    (("BTN_SELECT",), "cycle_behavior", "Create", "Next behaviour"),
     (("BTN_TL",), "slower", "L1", "Speed limit down"),
     (("BTN_TR",), "faster", "R1", "Speed limit up"),
 ]
@@ -108,6 +116,30 @@ def describe():
         "buttons": [{"button": name, "does": what} for _, _, name, what in BUTTONS],
         "axes": [{"button": name, "does": what} for name, what in AXES],
     }
+
+
+def _codes(names):
+    return {getattr(ecodes, n) for n in names if hasattr(ecodes, n)}
+
+
+def _check_bindings():
+    """No button may mean two things.
+
+    Cheap, and it is the check that would have caught Square and Triangle
+    sharing a code -- a fault with no symptom except a button that quietly did
+    the wrong job.
+    """
+    seen = {}
+    for names, action, label, _ in BUTTONS:
+        for code in _codes(names):
+            if code in seen:
+                raise ValueError(
+                    f"{label} ({action}) and {seen[code]} both claim code {code}")
+            seen[code] = label
+    return seen
+
+
+_check_bindings()
 
 
 def _looks_like_a_pad(device):
@@ -244,8 +276,9 @@ class Gamepad:
             print(f"[gamepad] {name}: {exc}", flush=True)
 
     def _button(self, code):
+        """Dispatch a press. One code, one action, checked at import time."""
         for names, action, _, _ in BUTTONS:
-            if code in {getattr(ecodes, n) for n in names if hasattr(ecodes, n)}:
+            if code in _codes(names):
                 self._do(action)
                 return
 

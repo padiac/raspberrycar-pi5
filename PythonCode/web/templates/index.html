@@ -649,6 +649,21 @@
   <p class="hint" id="hw"></p>
 </div>
 
+<!-- Before the script, not after it. Everything below runs the moment it
+     is parsed, so an element declared later does not exist yet: the
+     handler bindings threw on a null, and a throw at the top level takes
+     out every line after it -- including the telemetry poll, which is the
+     next statement. One missing element, and the page quietly stopped
+     updating. -->
+<div id="sheet" hidden>
+  <div class="sheetbox">
+    <div class="sheethead">
+      <h2>Controls</h2>
+      <button id="sheetclose">Close</button>
+    </div>
+    <div id="sheetbody"></div>
+  </div>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 const pulse = $('pulse'), speed = $('speed');
@@ -1423,14 +1438,5 @@ addEventListener('keydown', e => {
 
 setInterval(telemetry, 500);
 </script>
-<div id="sheet" hidden>
-  <div class="sheetbox">
-    <div class="sheethead">
-      <h2>Controls</h2>
-      <button id="sheetclose">Close</button>
-    </div>
-    <div id="sheetbody"></div>
-  </div>
-</div>
 </body>
 </html>
