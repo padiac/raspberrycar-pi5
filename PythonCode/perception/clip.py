@@ -26,16 +26,24 @@ import threading
 import time
 from datetime import datetime
 
-#: Long edge of the recording. The preview is 1280x720; a clip does not need
-#: to be, and halving it quarters the work and the file.
-WIDTH = 640
-FPS = 15
-#: Constant Rate Factor: lower is better and bigger. 26 is a visible step down
-#: from the preview but holds up on a phone, which is where these get watched.
-CRF = 26
+#: Defaults, all three of them adjustable at runtime -- these are choices
+#: about how good a recording should be, not facts about the hardware, so they
+#: do not belong in calibration.json with the ones that are.
+#:
+#: The camera streams 1280x720 at about 30fps, so anything below that is thrown
+#: away. It was: 640 wide at 15fps and CRF 26 came out at 90 kbit/s, which is a
+#: megabyte a couple of minutes and looks it. Encoding costs CPU on a Pi 5,
+#: which has no hardware H.264 encoder, and that CPU is shared with the object
+#: detector -- so the ceiling here is real and worth measuring rather than
+#: assuming.
+WIDTH = 1280
+FPS = 30
+#: Constant Rate Factor: lower is better and bigger. Each 6 either way roughly
+#: doubles or halves the file.
+CRF = 23
 #: Two hard stops, so a forgotten recording cannot fill the card. ffmpeg
 #: applies both itself and finishes the file properly when it hits either.
-MAX_BYTES = 150 * 1024 * 1024
+MAX_BYTES = 400 * 1024 * 1024
 MAX_SECONDS = 900
 #: Refuse to start with less than this free. A full root filesystem on a Pi is
 #: not a lost video, it is a robot that will not boot.
@@ -58,6 +66,7 @@ class ClipRecorder:
     """Records the stream to an MP4 on demand."""
 
     def __init__(self, frames, directory, camera_off=None):
+        self.width, self.fps, self.crf = WIDTH, FPS, CRF
         self.frames = frames
         #: Callable answering whether the camera is currently off.
         self.camera_off = camera_off
@@ -124,9 +133,9 @@ class ClipRecorder:
             # outright -- a video-only MP4 is unusual enough that plenty of
             # software treats it as broken.
             "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
-            "-vf", f"scale={WIDTH}:-2",
-            "-r", str(FPS),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(CRF),
+            "-vf", f"scale={self.width}:-2",
+            "-r", str(self.fps),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(self.crf),
             # Without this the file plays in ffmpeg and in nothing else --
             # phones and browsers want 4:2:0.
             "-pix_fmt", "yuv420p",
@@ -143,7 +152,7 @@ class ClipRecorder:
 
     def _pump(self):
         """Feed frames until told to stop, the file caps out, or ffmpeg dies."""
-        interval = 1.0 / FPS
+        interval = 1.0 / self.fps
         next_frame = 0.0
         while True:
             with self._lock:
@@ -271,6 +280,19 @@ class ClipRecorder:
             return False, str(exc)
         return True, "deleted"
 
+    def configure(self, width=None, fps=None, crf=None):
+        """Change the quality. Ignored while recording -- ffmpeg was told the
+        old numbers when it started and cannot be told new ones."""
+        if self.process is not None:
+            return False, "not while recording"
+        if width is not None:
+            self.width = int(max(320, min(1920, width)))
+        if fps is not None:
+            self.fps = int(max(5, min(30, fps)))
+        if crf is not None:
+            self.crf = int(max(14, min(35, crf)))
+        return True, "ok"
+
     def status(self):
         with self._lock:
             recording = self.process is not None
@@ -285,6 +307,9 @@ class ClipRecorder:
             free_mb = None
         return {
             "available": self.available,
+            "width": self.width,
+            "fps": self.fps,
+            "crf": self.crf,
             "recording": recording,
             "name": name,
             "seconds": seconds,

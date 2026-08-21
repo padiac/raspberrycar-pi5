@@ -371,6 +371,12 @@ def api_clip():
     if robot.clips is None:
         return jsonify(error="no camera"), 503
     data = request.get_json(silent=True) or {}
+    if any(k in data for k in ("width", "fps", "crf")):
+        ok, message = robot.clips.configure(
+            width=data.get("width"), fps=data.get("fps"),
+            crf=data.get("crf"))
+        if not ok:
+            return jsonify(error=message, clip=robot.clips.status()), 409
     action = data.get("action")
     if action == "start":
         ok, message = robot.clips.start()
