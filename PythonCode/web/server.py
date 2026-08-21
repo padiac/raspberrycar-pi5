@@ -54,7 +54,9 @@ def stream():
     if robot.vision is None:
         return jsonify(error="no camera"), 503
 
-    frames = robot.vision.frames
+    # The small copy, not the one the recorder eats. Full frames on a phone
+    # saturate the wifi and arrive late.
+    frames = robot.vision.preview
 
     def generate():
         # Counted around the whole generator, so a browser that goes away

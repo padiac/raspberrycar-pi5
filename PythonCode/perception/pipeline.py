@@ -20,6 +20,25 @@ from . import detector as detector_module
 
 JPEG_QUALITY = int(os.environ.get("CAR_JPEG_QUALITY", "90"))
 
+#: The browser gets its own, smaller copy.
+#:
+#: The full frames exist for the recorder and are worth their size there. Sent
+#: to a phone they are a disaster: 1280x720 at quality 90, thirty times a
+#: second, measured at 152KB a frame and 37 Mbit/s. No house wifi delivers that
+#: to a handset, so the link saturates, TCP queues what it cannot send, and the
+#: picture on the phone falls further and further behind -- which looks like
+#: stuttering and is actually a growing backlog of frames that were true
+#: several seconds ago.
+#:
+#: Motion Jpeg has no compression between frames, so a still room costs exactly
+#: as much to send as a moving one. There is no cleverness to apply; the only
+#: lever is to send less.
+PREVIEW_WIDTH = int(os.environ.get("CAR_PREVIEW_WIDTH", "640"))
+PREVIEW_QUALITY = int(os.environ.get("CAR_PREVIEW_QUALITY", "70"))
+#: Driving does not need thirty. Half of them, at a fifth of the size, is a
+#: tenth of the bytes and looks the same on a phone screen.
+PREVIEW_FPS = float(os.environ.get("CAR_PREVIEW_FPS", "15"))
+
 # Unthrottled the detector runs ~50 fps and eats about 3.4 of the Pi's 4 cores,
 # starving the control loop. A robot reacts fine on 10 fps of detections.
 DEFAULT_DETECT_FPS = 10.0
@@ -49,6 +68,12 @@ class VisionPipeline:
         self.camera = camera
         self.detector = detector
         self.frames = FrameBuffer()
+        #: What the browser watches: same pictures, much smaller.
+        self.preview = FrameBuffer()
+        self.preview_width = PREVIEW_WIDTH
+        self.preview_quality = PREVIEW_QUALITY
+        self.preview_fps = PREVIEW_FPS
+        self._preview_at = 0.0
 
         self.detect_enabled = False
         self.detect_target_fps = DEFAULT_DETECT_FPS
@@ -122,6 +147,31 @@ class VisionPipeline:
         ok, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         if ok:
             self.frames.publish(jpeg.tobytes())
+            self._publish_preview(img, force=True)
+
+    def _publish_preview(self, image, force=False):
+        """Encode a small copy for the browser, no faster than it needs.
+
+        Rate-limited here rather than in the streaming endpoint because the
+        saving that matters is the encode as well as the bytes: skipping a
+        frame this early costs nothing at all.
+        """
+        now = time.perf_counter()
+        interval = 1.0 / max(1.0, self.preview_fps)
+        if not force and now - self._preview_at < interval:
+            return
+        self._preview_at = now
+
+        height, width = image.shape[:2]
+        if width > self.preview_width:
+            scale = self.preview_width / float(width)
+            image = cv2.resize(
+                image, (self.preview_width, max(2, int(round(height * scale)))),
+                interpolation=cv2.INTER_AREA)
+        ok, jpeg = cv2.imencode(
+            ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, self.preview_quality])
+        if ok:
+            self.preview.publish(jpeg.tobytes())
 
     def _capture_loop(self):
         smoothed = None
@@ -158,6 +208,7 @@ class VisionPipeline:
             )
             if ok:
                 self.frames.publish(jpeg.tobytes())
+            self._publish_preview(annotated)
 
             # Whole-loop time, capture wait included: this is the rate frames
             # actually reach the browser, not just how fast we can encode one.
