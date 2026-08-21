@@ -40,9 +40,36 @@ SCAN_ANGLES = (-90.0, -45.0, 0.0, 45.0, 90.0)
 #: ping or two from the new direction; a reading taken mid-swing describes
 #: somewhere the head no longer is.
 SCAN_DWELL = 0.4
-#: A timed-out ping means nothing within about 4m, which for "where is there
-#: room" is simply the best possible answer.
+#: The most room any direction can be worth, so one very long reading does
+#: not dominate every comparison.
 CLEAR_CM = 400.0
+
+#: What a timed-out ping is worth when choosing where to go.
+#:
+#: Not the maximum, which is what it used to be scored as. An echo that never
+#: came back might be four metres of empty room, or a curtain ten centimetres
+#: away -- and indoors it is usually the soft thing. Fabric absorbs the pulse
+#: and glass mirrors it away, and both report exactly what an empty room
+#: reports. Scoring that as the best direction available meant the sweep
+#: actively steered the car towards the only things it cannot see: into a
+#: sofa, and into the corner where a curtain met one, with half the room open
+#: behind it.
+#:
+#: So it ranks below anything measured as roomy and above anything measured as
+#: close. An unknown is worth trying when the alternative is a wall you can
+#: see, and not worth trying when there is real space elsewhere.
+UNKNOWN_CM = 70.0
+
+#: Being blocked this many times inside this window means the ways out are not
+#: working. The classic case is a corner: every direction that looks open is a
+#: soft surface that is not, so each escape leads straight back.
+TRAPPED_BLOCKS = 3
+TRAPPED_WINDOW_S = 25.0
+#: What to do about it. Back out much further than usual, then turn most of the
+#: way round -- the one direction that is certainly clear is where the car came
+#: from.
+TRAPPED_REVERSE_S = 1.6
+TRAPPED_TURN_S = 2.2
 
 #: Turning towards 90 degrees should turn further than towards 45, so the hold
 #: scales with how far round the chosen direction is.
@@ -107,6 +134,10 @@ class PatrolBehavior(Behavior):
         self.blocked_since = None
         self.scan = None            # index into SCAN_ANGLES, and when to read
         self.clearance = {}
+        self.unknown = set()        # angles that returned nothing at all
+        self.blocks = []            # when recent sweeps happened
+        self.avoid = None           # (angle, until) a way out that did not work
+        self.follow = None          # second half of a two-part manoeuvre
         self.glance = None          # (angle, when to read it)
         self.glance_next = 0.0      # when to look away again
         self.glance_side = 1.0      # alternates, so both sides get looked at
@@ -119,6 +150,10 @@ class PatrolBehavior(Behavior):
         self.blocked_since = None
         self.scan = None
         self.clearance = {}
+        self.unknown = set()
+        self.blocks = []
+        self.avoid = None
+        self.follow = None
         self.glance = None
         self.glance_next = 0.0
         self.sides = {}
@@ -141,6 +176,19 @@ class PatrolBehavior(Behavior):
         # Mid-manoeuvre from an earlier tick: see it through.
         if now < self.until:
             return self.move
+
+        # Some manoeuvres come in two parts -- back out of the corner, then
+        # turn round -- and the second must not be interrupted by the first
+        # tick of ordinary cruising deciding everything is fine again.
+        if getattr(self, "follow", None):
+            what, _ = self.follow
+            self.follow = None
+            if what == "turn_back":
+                return self._commit(
+                    robot, now,
+                    Velocity(omega=random.choice((-1.0, 1.0))
+                             * self._enough(robot, TURN_SPEED)),
+                    TRAPPED_TURN_S, "cornered -- turning round")
 
         # Ask the safety layer what happened to our last request rather than
         # reading the sensors again here -- it already decided, and duplicating
@@ -262,6 +310,9 @@ class PatrolBehavior(Behavior):
                 TURN_HOLD_MIN, "blocked, picking a way round",
             )
         self.clearance = {}
+        self.unknown = set()
+        self.blocks = [t for t in self.blocks if now - t < TRAPPED_WINDOW_S]
+        self.blocks.append(now)
         self.glance = None          # the sweep takes the head from here
         self.scan = (0, now + SCAN_DWELL)
         robot.pan.look(SCAN_ANGLES[0])
@@ -282,9 +333,15 @@ class PatrolBehavior(Behavior):
 
         angle = SCAN_ANGLES[index]
         reading = world.range_cm
-        self.clearance[angle] = (
-            CLEAR_CM if reading is None or reading <= 0 else min(reading, CLEAR_CM)
-        )
+        if reading is None or reading <= 0:
+            # Heard nothing. That is not a measurement of open space, it is
+            # the absence of a measurement, and indoors the commonest cause
+            # is something soft standing right there.
+            self.clearance[angle] = UNKNOWN_CM
+            self.unknown.add(angle)
+        else:
+            self.clearance[angle] = min(reading, CLEAR_CM)
+            self.unknown.discard(angle)
 
         if index + 1 < len(SCAN_ANGLES):
             self.scan = (index + 1, now + SCAN_DWELL)
@@ -297,52 +354,79 @@ class PatrolBehavior(Behavior):
         return self._decide(robot, now)
 
     def _decide(self, robot, now):
+        """Choose a way out of wherever the sweep just found the car."""
+        if len(self.blocks) >= TRAPPED_BLOCKS:
+            # Three sweeps inside half a minute means every way out chosen so
+            # far has led straight back. Almost always a corner of soft things,
+            # each of which reads as open and none of which is. Stop choosing
+            # between them: the one direction known to be clear is the one the
+            # car arrived from, so reverse a long way and turn most of the way
+            # round.
+            self.blocks = []
+            self.avoid = None
+            return self._commit(
+                robot, now, Velocity(vx=-REVERSE_SPEED), TRAPPED_REVERSE_S,
+                "cornered -- backing right out", follow=("turn_back", now))
+
+        profile = " ".join(
+            "%+d:%s" % (int(a), "?" if a in self.unknown else "%.0f" % self.clearance[a])
+            for a in sorted(self.clearance))
+
         roomiest = max(self.clearance.values(), default=0.0)
         if roomiest < BOXED_IN_CM:
-            # Nowhere in front has room. Turning on the spot in a corner just
-            # finds the same corner again, so back out and look afresh.
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
-                f"boxed in ({roomiest:.0f}cm all round), backing out",
+                f"boxed in ({roomiest:.0f}cm all round), backing out | {profile}",
             )
 
         # Only somewhere else is a candidate. Straight ahead is where the car
-        # is already pointing and has just been refused, so "turn towards 0
-        # degrees" is not a manoeuvre -- it was measured anyway, because how
+        # already points and has just been refused; it is measured because how
         # blocked the front is tells a doorway from a wall.
         #
-        # This used to fall out of a special case: pick the roomiest of all
-        # five, and if that came out as straight ahead, turn to a randomly
-        # chosen side. Which is how the car was seen turning towards 19cm of
-        # room with 400cm available on the other side -- the coin toss did not
-        # look at the numbers it was choosing between.
-        options = {a: cm for a, cm in self.clearance.items() if a != 0.0}
-        if not options:
+        # Each candidate is scored by the room at it AND beside it. A single
+        # clear angle flanked by obstacles is a gap the width of the beam, and
+        # the car is wider than the beam -- picking the deepest reading rather
+        # than the widest opening is how it kept aiming at slots it could not
+        # fit through.
+        angles = sorted(self.clearance)
+        scores = {}
+        for index, angle in enumerate(angles):
+            if angle == 0.0:
+                continue
+            if self.avoid and angle == self.avoid[0] and now < self.avoid[1]:
+                continue        # this way out was tried and did not work
+            around = [self.clearance[angles[j]]
+                      for j in (index - 1, index, index + 1)
+                      if 0 <= j < len(angles)]
+            scores[angle] = min(around)
+
+        if not scores:
             return self._commit(
                 robot, now,
                 Velocity(omega=self._guess(robot) * self._enough(robot, TURN_SPEED)),
-                TURN_HOLD_MIN, "nowhere measured, guessing",
+                TURN_HOLD_MIN, f"nowhere left to try | {profile}",
             )
 
-        room = max(options.values())
+        best_score = max(scores.values())
         # A tie is real -- a corridor looks the same both ways -- so break it
         # randomly rather than always choosing the same side of it.
-        rivals = [a for a, cm in options.items() if cm > room - 5.0]
+        rivals = [a for a, s in scores.items() if s > best_score - 5.0]
         best = random.choice(rivals)
-        room = options[best]
+        room = self.clearance[best]
+
+        # Remember it, so if this fails the next decision does not repeat it.
+        self.avoid = (best, now + TRAPPED_WINDOW_S)
 
         direction = 1.0 if best > 0 else -1.0
         hold = TURN_HOLD_MIN + (TURN_HOLD_MAX - TURN_HOLD_MIN) * (abs(best) / 90.0)
-        profile = " ".join(
-            f"{int(a):+d}:{self.clearance[a]:.0f}" for a in sorted(self.clearance)
-        )
+        measured = "?" if best in self.unknown else "%.0fcm" % room
         return self._commit(
             robot, now,
             Velocity(omega=direction * self._enough(robot, TURN_SPEED)), hold,
-            f"most room {self._name(best)} ({room:.0f}cm) | {profile}",
+            f"most room {self._name(best)} ({measured}) | {profile}",
         )
 
-    def _commit(self, robot, now, velocity, seconds, state):
+    def _commit(self, robot, now, velocity, seconds, state, follow=None):
         """Hold a manoeuvre for a while, so the car clears what stopped it
         instead of twitching on the spot as the reading flickers.
 
@@ -358,6 +442,7 @@ class PatrolBehavior(Behavior):
         """
         self.move = velocity
         self.until = now + seconds
+        self.follow = follow
         floor = robot.calibration.get("turn_floor") if robot.calibration else 0.0
         effective = abs(velocity.omega) * robot.speed_limit
         if floor and velocity.omega and effective < floor:
