@@ -55,9 +55,19 @@ class ReplayBehavior(Behavior):
         self.state = f"{min(self.index + 1, len(self.segments))}/{len(self.segments)}"
         return segment.velocity
 
+    @property
+    def finished(self):
+        """True when the path has been played out and the car is just sitting.
+
+        Not the same as "not moving": a recorded pause is a segment like any
+        other, and the middle of one looks identical from outside.
+        """
+        return self.index >= len(self.segments) and not self.loop
+
     def status(self):
         return {
             "state": self.state,
+            "finished": self.finished,
             "step": f"{self.index}/{len(self.segments)}",
             "loop": self.loop,
         }

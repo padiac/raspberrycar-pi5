@@ -410,10 +410,31 @@ class Robot:
         return self.select(names[(index + 1) % len(names)])
 
     def play_path(self):
-        """Drive the recorded route back. Nothing recorded, nothing happens."""
+        """Drive the recorded route back, from the top, however it was left.
+
+        select() refuses to re-enter the behaviour already running, which is
+        right -- it is what stops a poll from restarting things twice a second
+        -- but it made pressing replay a second time do nothing at all. The
+        replay had finished and was sitting there done, so asking for it again
+        was asking for no change, and the answer was no change. Driving in
+        between appeared to fix it, because that switched to manual and made
+        the next request a real switch.
+
+        Running it again is not a switch, so it does not go through one.
+        """
         self.recorder.disarm()
         if not self.recorder.segments:
             return False, "nothing recorded"
+        with self.lock:
+            replay = self.behaviors["replay"]
+            if self.behavior is replay:
+                if not replay.finished:
+                    # Pressing it again halfway through means the button was
+                    # pressed twice, not that the drive should start over from
+                    # where it is now -- which would be a different drive.
+                    return False, "already replaying"
+                replay.start(self)
+                return True, "replaying again"
         return self.select("replay")
 
     def nudge_speed(self, delta):

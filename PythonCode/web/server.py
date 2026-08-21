@@ -249,14 +249,16 @@ def api_path():
         robot.recorder.disarm()
         robot.recorder.clear()
     elif action == "run":
-        robot.recorder.disarm()
-        if not robot.recorder.segments:
-            return jsonify(error="nothing recorded"), 409
-        ok, message = robot.select("replay")
-        if not ok:
-            return jsonify(error=message), 409
+        # Through the robot, not around it. This used to select the behaviour
+        # itself, which meant the button on the controller and the button on
+        # the page were two implementations of one operation -- and only one of
+        # them knew that replaying again after it has finished is allowed while
+        # replaying again halfway through is not.
         if "loop" in data:
             robot.behaviors["replay"].configure(loop=data["loop"])
+        ok, message = robot.play_path()
+        if not ok:
+            return jsonify(error=message), 409
     elif action is not None:
         return jsonify(error=f"unknown action '{action}'"), 400
 
