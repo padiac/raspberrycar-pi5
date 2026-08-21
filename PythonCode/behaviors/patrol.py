@@ -338,27 +338,8 @@ class PatrolBehavior(Behavior):
         return seen[0]
 
     def _enough(self, robot, magnitude):
-        """Raise a turn to something that will actually rotate the car.
-
-        Below a measured duty these motors do not turn the chassis at all --
-        rotating in place fights the rollers on all four wheels, and it costs
-        more than driving straight. So a turn command under that floor is not
-        a gentler turn, it is no turn, and asking for one produces a behaviour
-        convinced it manoeuvred and a car that did not move. That is exactly
-        what a 0.35 side-avoidance did at every speed limit worth using: 0.12
-        of duty against a floor of 0.20.
-
-        Raising it does not spend what the speed limit was protecting. The
-        limit is about how fast the car crosses a room; a turn in place
-        crosses nothing.
-
-        With no measured floor -- nobody has run the calibration -- this does
-        nothing, which is the same behaviour as before it existed.
-        """
-        floor = robot.calibration.get("turn_floor") if robot.calibration else 0.0
-        if not floor:
-            return magnitude
-        return min(1.0, max(magnitude, floor / max(robot.speed_limit, 1e-6)))
+        """See Robot.enough_to_turn. Manual driving needs the same rule now."""
+        return robot.enough_to_turn(magnitude)
 
     def _glance(self, robot, world, now):
         """Look aside briefly, then come straight back.

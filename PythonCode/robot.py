@@ -66,7 +66,7 @@ class Robot:
     #: energy looking at a room nobody is asking about.
     idle_camera_after = 300.0
 
-    speed_limit = 0.15
+    speed_limit = 0.40
     #: Momentary, from a controller's trigger: lifts the limit for as long
     #: as it is held rather than changing what the slider says. Zero unless
     #: something is actively holding it there, so it cannot be left on.
@@ -176,6 +176,8 @@ class Robot:
         self.behavior_error = None
         self.world = WorldState()
 
+        self._clip_toggle_lock = threading.RLock()
+        self._clip_toggled_at = 0.0
         self.lock = threading.RLock()
         self.running = True
         threading.Thread(target=self._control_loop, daemon=True).start()
@@ -363,6 +365,28 @@ class Robot:
 
     # -- things a driver can ask for, from a pad or from the page -----------
 
+    def enough_to_turn(self, magnitude):
+        """Raise a turn to something that will actually rotate the car.
+
+        Below a measured duty these motors do not turn the chassis at all --
+        rotating in place fights the rollers on all four wheels, and costs more
+        than driving straight. A turn command under that floor is not a gentler
+        turn, it is no turn, and asking for one produces a behaviour convinced
+        it manoeuvred and a car that did not move.
+
+        Lives here rather than in one behaviour because more than one thing
+        wants it now: patrol, which learned it the hard way, and manual
+        driving, which halves its turns for the camera and could halve them
+        into nothing.
+
+        No floor measured -- nobody has run the calibration -- and this does
+        nothing, which is the behaviour from before it existed.
+        """
+        floor = self.calibration.get("turn_floor") if self.calibration else 0.0
+        if not floor:
+            return magnitude
+        return min(1.0, max(magnitude, floor / max(self.speed_limit, 1e-6)))
+
     def set_boost(self, amount):
         """Momentary speed, held by whoever is holding it."""
         try:
@@ -447,13 +471,29 @@ class Robot:
         self.speed_limit = max(0.10, min(1.0, self.speed_limit + delta))
         return self.speed_limit
 
+    #: Video recording will not change state faster than this. Starting and
+    #: stopping both take a moment -- spawning ffmpeg, and waiting for it to
+    #: write the index -- and a second request arriving inside that window is
+    #: a button bouncing or a person pressing twice, never an intention.
+    TOGGLE_CLIP_GUARD_S = 1.0
+
     def toggle_clip(self):
-        """Start or stop recording video, from a button rather than the page."""
+        """Start or stop recording video, from a button rather than the page.
+
+        Serialised, because it is reachable from the controller thread and the
+        web server at once, and because "is it recording" followed by "so do
+        the opposite" is only correct if nothing changes in between.
+        """
         if self.clips is None:
             return False, "no camera"
-        if self.clips.status()["recording"]:
-            return self.clips.stop()
-        return self.clips.start()
+        with self._clip_toggle_lock:
+            now = time.monotonic()
+            if now - self._clip_toggled_at < self.TOGGLE_CLIP_GUARD_S:
+                return False, "too soon"
+            self._clip_toggled_at = now
+            if self.clips.status()["recording"]:
+                return self.clips.stop()
+            return self.clips.start()
 
     def toggle_record(self):
         if self.recorder.recording:

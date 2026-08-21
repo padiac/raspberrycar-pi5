@@ -61,6 +61,12 @@ CRAWL = 0.2
 #: Each nudge of the D-pad, in degrees.
 PAN_STEP = 45.0
 
+#: The same direction pressed again inside this is the switch bouncing, not a
+#: person. Nobody presses a d-pad twice in a third of a second, and the "has
+#: the value changed" test does not catch it: a bounce goes -1, 0, -1, and
+#: every one of those is a change.
+REPEAT_GUARD_S = 0.3
+
 #: Rumble is re-sent rather than held, because an effect with a duration
 #: outlives the reason for it if the car stops. This is how often.
 RUMBLE_PERIOD_S = 0.4
@@ -189,6 +195,7 @@ class Gamepad:
         self._axes = {}
         self._scale = {}
         self._hat = {}
+        self._hat_at = {}
         self._alert = 0.0
         self._rumble_sent = -1.0
         self._rumble_at = 0.0
@@ -222,6 +229,7 @@ class Gamepad:
             self._scale[code] = (info.min, info.max)
         self._axes = {}
         self._hat = {}
+        self._hat_at = {}
         self.rumble_ok = ecodes.FF_RUMBLE in device.capabilities().get(ecodes.EV_FF, [])
         self._effect_id = None
         self._rumble_sent = -1.0
@@ -279,6 +287,7 @@ class Gamepad:
     # -- buttons -----------------------------------------------------------
 
     def _do(self, name, *args):
+        """Run an action here and now. For quick ones only -- see _do_async."""
         action = self.actions.get(name)
         if action is None:
             return
@@ -287,11 +296,29 @@ class Gamepad:
         except Exception as exc:  # noqa: BLE001 - a bound action must not kill the reader
             print(f"[gamepad] {name}: {exc}", flush=True)
 
+    def _do_async(self, name, *args):
+        """Run an action without making the controller wait for it.
+
+        Some of them are slow. Stopping a recording waits for ffmpeg to write
+        the index, which can take seconds, and done on this thread it stops the
+        reader dead: events pile up in the kernel buffer, the release of the
+        button that started it arrives late along with whatever was pressed
+        next, and they are all processed in a rush afterwards. The car stops
+        answering the sticks for the duration, too.
+
+        Buttons are the only things routed through here. The triggers are read
+        every tick and must stay in order, so they still go through _do.
+        """
+        if self.actions.get(name) is None:
+            return
+        threading.Thread(
+            target=self._do, args=(name,) + args, daemon=True).start()
+
     def _button(self, code):
         """Dispatch a press. One code, one action, checked at import time."""
         for names, action, _, _ in BUTTONS:
             if code in _codes(names):
-                self._do(action)
+                self._do_async(action)
                 return
 
     def _hat_moved(self, code, value):
@@ -306,12 +333,22 @@ class Gamepad:
         self._hat[code] = value
         if value == 0:
             return
+
+        # A bounce is -1, 0, -1 in a few milliseconds, and every one of those is
+        # a change, so the test above waves it straight through. Two toggles of
+        # a video recording from one press of a button is exactly what that
+        # looks like from the outside.
+        now = time.monotonic()
+        if now - self._hat_at.get((code, value), 0.0) < REPEAT_GUARD_S:
+            return
+        self._hat_at[(code, value)] = now
+
         for axis, when, action, argument, _, _ in HATS:
             if code == getattr(ecodes, axis, None) and value == when:
                 if argument is None:
-                    self._do(action)
+                    self._do_async(action)
                 else:
-                    self._do(action, argument)
+                    self._do_async(action, argument)
                 return
 
     # -- rumble ------------------------------------------------------------
