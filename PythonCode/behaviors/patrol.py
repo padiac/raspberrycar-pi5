@@ -60,6 +60,22 @@ CLEAR_CM = 400.0
 #: see, and not worth trying when there is real space elsewhere.
 UNKNOWN_CM = 70.0
 
+#: Driving at something and not getting closer to it.
+#:
+#: The safety layer cannot catch this. It refuses to drive at something close,
+#: and this is the case where the reading never becomes close -- the car is
+#: pressed against something the beam reads past, or a wheel is on a cable, and
+#: the distance ahead simply stops changing. Nothing else notices, because
+#: every part of the system is being told what it expects to hear: the wheels
+#: are commanded, the reading is plausible, the behaviour is content.
+#:
+#: Six seconds and six centimetres. The car creeps at two to three centimetres
+#: a second when the safety layer is throttling it near an obstacle, so a
+#: genuine slow approach still covers more than this; standing still covers
+#: none of it.
+NO_PROGRESS_S = 6.0
+NO_PROGRESS_CM = 6.0
+
 #: Clearance needed all round before turning on the spot.
 #:
 #: Every other manoeuvre is checked before it happens: the safety layer will
@@ -162,6 +178,7 @@ class PatrolBehavior(Behavior):
         self.blocks = []            # when recent sweeps happened
         self.avoid = None           # (angle, until) a way out that did not work
         self.follow = None          # second half of a two-part manoeuvre
+        self.progress = []          # (when, how far ahead) while cruising
         self.glance = None          # (angle, when to read it)
         self.glance_next = 0.0      # when to look away again
         self.glance_side = 1.0      # alternates, so both sides get looked at
@@ -178,6 +195,7 @@ class PatrolBehavior(Behavior):
         self.blocks = []
         self.avoid = None
         self.follow = None
+        self.progress = []
         self.glance = None
         self.glance_next = 0.0
         self.sides = {}
@@ -249,6 +267,12 @@ class PatrolBehavior(Behavior):
         if robot.pan is not None:
             self._glance(robot, world, now)
 
+        if self._going_nowhere(world, now):
+            # Not blocked as far as the safety layer is concerned, and not
+            # getting anywhere either. Treat it as blocked, because it is.
+            self.progress = []
+            return self._start_looking(robot, now)
+
         # Steer away from the nearer side, if either is close enough to matter
         # and was seen recently enough to still be beside the car. Both being
         # close is a gap, not an obstacle, and steering out of a gap is how you
@@ -278,6 +302,33 @@ class PatrolBehavior(Behavior):
         aim = "" if not self.glance else " | looking %+.0f" % self.glance[0]
         self.state = "cruising" + aim + note
         return Velocity(vx=CRUISE, omega=omega)
+
+    def _going_nowhere(self, world, now):
+        """True if the way ahead has stopped getting closer while driving at it.
+
+        Only real readings count. A stretch of nothing-came-back does not
+        change either, and calling that stuck would mean an open room and a
+        sofa are the same thing -- which is the mistake this sensor invites at
+        every level it is used.
+        """
+        ahead = world.forward_cm
+        if ahead is None or ahead <= 0:
+            self.progress = []
+            return False
+        self.progress.append((now, ahead))
+        # Keep more history than the window being judged. Trimming to exactly
+        # NO_PROGRESS_S and then asking whether the samples span NO_PROGRESS_S
+        # is a question that can never be answered yes: after the trim the
+        # oldest sample is at most that old, and floating point makes "at most"
+        # into "just under". Written that way it looked right and never fired
+        # once, through three minutes of a car with its wheels turning and a
+        # cable round the axle.
+        self.progress = [p for p in self.progress if now - p[0] <= NO_PROGRESS_S * 2]
+        recent = [p for p in self.progress if now - p[0] <= NO_PROGRESS_S]
+        if len(recent) < 10 or now - recent[0][0] < NO_PROGRESS_S * 0.9:
+            return False
+        values = [p[1] for p in recent]
+        return max(values) - min(values) < NO_PROGRESS_CM
 
     def _side(self, which, now):
         """How far away the last thing seen on that side was, if still relevant."""

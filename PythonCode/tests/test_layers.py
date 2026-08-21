@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hal.drivetrain import DifferentialDrive, MecanumDrive, Velocity, _normalise, SerialDrivetrain
 from hal.sensors import Proximity
+from behaviors.patrol import PatrolBehavior
 from control.safety import NO_ECHO_CEILING, SafetyLayer
 from perception.types import Detection, WorldState
 
@@ -121,6 +122,50 @@ check_eq("obstacle left: strafe right allowed", out.vy, 1.0)
 
 out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(left=True, right=True)))
 check_eq("boxed in: forward blocked", out.vx, 0.0)
+
+print("\nnoticing that the wheels turn and the car does not move")
+# The safety layer cannot catch this. It refuses to drive at something close,
+# and this is the case where the reading never becomes close: pressed against
+# something the beam reads past, or a wheel on a cable. Everything downstream
+# is being told what it expects to hear.
+patrol = PatrolBehavior()
+
+
+def cruise_for(seconds, distance, step=0.05, start=0.0):
+    """Feed the behaviour a stretch of driving, and say if it cried foul."""
+    t = start
+    verdict = False
+    while t < start + seconds:
+        ahead = distance(t) if callable(distance) else distance
+        verdict = patrol._going_nowhere(
+            WorldState(range_cm=ahead, range_expected=True), t)
+        t += step
+    return verdict
+
+
+check_eq("four seconds of no change: too early to say",
+         cruise_for(4.0, 65.5), False)
+
+patrol.progress = []
+check_eq("eight seconds of no change: not going anywhere",
+         cruise_for(8.0, 65.5), True)
+
+patrol.progress = []
+check_eq("closing on something steadily: fine",
+         cruise_for(8.0, lambda t: 200.0 - 12.0 * t), False)
+
+patrol.progress = []
+# Creeping is what the safety layer makes it do near an obstacle, measured at
+# 2-3 cm/s, and it must not read as stuck.
+check_eq("creeping at 2.5 cm/s: fine",
+         cruise_for(8.0, lambda t: 60.0 - 2.5 * t), False)
+
+patrol.progress = []
+# Silence is not a small number. Reading it as one would make an open room and
+# a sofa the same thing, again.
+check_eq("nothing coming back: says nothing either way",
+         cruise_for(8.0, -1.0), False)
+
 
 print("\nthe head may look away, but not for long")
 # The head is on a servo and has reasons to look elsewhere -- a chair leg is a
