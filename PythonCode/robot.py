@@ -26,6 +26,7 @@ from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
 from hal.gamepad import Gamepad
+from hal.supply import Supply
 from hal.sensors import (
     FloorArray, PanServo, ProximityArray, RangeFinder, SerialRangeFinder,
 )
@@ -116,6 +117,8 @@ class Robot:
         ) if self.vision else None
         self.safety = SafetyLayer()
         self.recorder = PathRecorder()
+        # Costs no wiring: the Pi already measures the rail it runs on.
+        self.supply = _optional("supply monitor", Supply)
 
         # A controller is not a behaviour, it is a driver -- so it goes in
         # through the same door as the on-screen pad and gets the same
@@ -540,6 +543,7 @@ class Robot:
             "allowed": self.allowed.as_dict(),
             "safety": self.safety.status(),
             "speed_limit": self.speed_limit,
+            "supply": self.supply.status() if self.supply else None,
             "idle": {
                 "after_s": self.idle_camera_after,
                 "quiet_s": round(time.monotonic() - self.last_activity, 1),

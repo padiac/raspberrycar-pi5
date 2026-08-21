@@ -462,6 +462,7 @@
   <span class="chip" id="safechip">safety</span>
   <span class="chip warn" id="aimchip" hidden>sensor turned away</span>
   <span class="chip" id="idlechip" hidden>camera asleep</span>
+  <span class="chip bad" id="powerchip" hidden>power</span>
   <button id="theme" title="Switch theme">◐</button>
   <button id="estop">STOP</button>
 </div>
@@ -577,6 +578,7 @@
   <h2>Diagnostics</h2>
   <div class="tel">
     <div><span>Range</span><b id="range">--</b></div>
+    <div><span>Supply</span><b id="supply">--</b></div>
     <div><span>Sensor aim</span><b id="panaim">--</b></div>
     <div><span>vx fwd</span><b id="vx">0.00</b></div>
     <div><span>vy strafe</span><b id="vy">0.00</b></div>
@@ -1158,6 +1160,7 @@ async function telemetry() {
     renderPan(d.pan);
     renderGamepad(d.gamepad);
     renderIdle(d.idle);
+    renderSupply(d.supply);
     if (d.clip) { renderClipState(d.clip); if (d.clip.recording) clipTick(); }
 
     const missing = Object.entries(d.available).filter(([, ok]) => !ok).map(([k]) => k);
@@ -1286,6 +1289,34 @@ function renderIdle(idle) {
   $('idlechip').textContent = 'camera asleep — tap to wake';
 }
 $('idlechip').onclick = () => post('/api/camera', {enabled: true});
+
+// ---- the rail the Pi runs on --------------------------------------------
+// A battery rarely fails cleanly: the voltage sags for a while first, and only
+// then does everything stop at once. That sag is the only warning available,
+// and the Pi measures it without any help.
+function renderSupply(s) {
+  const el = $('supply'), chip = $('powerchip');
+  if (!s || !s.available) { el.textContent = '--'; chip.hidden = true; return; }
+  el.textContent = s.volts == null ? '--' : s.volts.toFixed(2) + ' V';
+  el.style.color = s.unhappy ? 'var(--bad)' : '';
+
+  // "ever" outlives the event that caused it, which is the point: a brownout
+  // lasting 200ms leaves nothing to see afterwards unless something kept the
+  // note. Rebooting clears the Pi's own copy, so a fault that causes a reboot
+  // erases its own evidence.
+  if (s.unhappy) {
+    chip.hidden = false;
+    chip.className = 'chip bad';
+    chip.textContent = s.now.length ? s.now.join(', ')
+      : 'supply sagging (' + s.volts.toFixed(2) + 'V)';
+  } else if (s.ever.length) {
+    chip.hidden = false;
+    chip.className = 'chip warn';
+    chip.textContent = 'earlier: ' + s.ever.join(', ');
+  } else {
+    chip.hidden = true;
+  }
+}
 
 setInterval(telemetry, 500);
 </script>
