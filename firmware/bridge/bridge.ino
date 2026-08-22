@@ -26,7 +26,7 @@
 //                  $E*CS                     stop now
 //                  $W,<fl>,<fr>,<rl>,<rr>*CS raw wheels, calibration only
 //
-//   ESP32 -> Pi    $T,<range_cm>,<fl>,<fr>,<rl>,<rr>,<stopped>*CS
+//   ESP32 -> Pi    $T,<range_cm>,<fl>,<fr>,<rl>,<rr>,<stopped>,<irL>,<irR>*CS
 //                  $!,<message>*CS           something went wrong
 //
 // range_cm is -1 when the sensor gave no echo.
@@ -37,6 +37,23 @@
 #define TRIG 2
 #define ECHO 34
 #define SERVO_PIN 4
+
+// Side-looking infrared, one per front corner. These see what the ultrasonic
+// cannot: its beam is about fifteen degrees wide and the car is wider than
+// that, so a chair leg off the bow is invisible until a wheel finds it.
+//
+// GPIO 12 is deliberately not used. It is a strapping pin (MTDI) and a high
+// level on it at boot selects the wrong flash voltage, which can stop the
+// board coming up at all. GPIO 15 is also a strapping pin but the harmless
+// way round: it is pulled up by default and pulling it low only silences the
+// boot log.
+//
+// Pulled up internally, so an unwired pin reads as "nothing there" rather
+// than floating and inventing obstacles out of motor noise.
+#define IR_LEFT 13
+#define IR_RIGHT 15
+// These modules pull their output LOW when something is in front of them.
+#define IR_DETECTED LOW
 
 #define PWMA 32   // left front
 #define AIN2 33
@@ -91,6 +108,7 @@ unsigned long gLastCommand = 0;
 //: Last heartbeat, kept only so link liveness can be reported separately.
 unsigned long gLastHeartbeat = 0;
 float gRangeCm = -1;
+bool gIrLeft = false, gIrRight = false;
 
 char gLine[96];
 uint8_t gLen = 0;
@@ -162,9 +180,13 @@ void sendLine(const char *body) {
 }
 
 void sendTelemetry() {
-  char body[96];
-  snprintf(body, sizeof(body), "T,%.1f,%.3f,%.3f,%.3f,%.3f,%d",
-           gRangeCm, gWheel[0], gWheel[1], gWheel[2], gWheel[3], gStopped ? 1 : 0);
+  char body[112];
+  // Appended, never inserted. The Pi accepts a T line with at least the
+  // original seven fields and ignores the rest, so new firmware works
+  // with old code and old firmware works with new.
+  snprintf(body, sizeof(body), "T,%.1f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d",
+           gRangeCm, gWheel[0], gWheel[1], gWheel[2], gWheel[3],
+           gStopped ? 1 : 0, gIrLeft ? 1 : 0, gIrRight ? 1 : 0);
   sendLine(body);
 }
 
@@ -261,6 +283,8 @@ void setup() {
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   digitalWrite(TRIG, LOW);
+  pinMode(IR_LEFT, INPUT_PULLUP);
+  pinMode(IR_RIGHT, INPUT_PULLUP);
 
   ESP32PWM::allocateTimer(0);
   cam.setPeriodHertz(50);
@@ -293,6 +317,9 @@ void loop() {
     // stopping is a command like any other and has to reach the pins.
     applyVelocity(gVx, gVy, gW);
   }
+
+  gIrLeft = digitalRead(IR_LEFT) == IR_DETECTED;
+  gIrRight = digitalRead(IR_RIGHT) == IR_DETECTED;
 
   static unsigned long lastRange = 0;
   if (millis() - lastRange >= RANGE_PERIOD_MS) {

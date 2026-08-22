@@ -67,6 +67,9 @@ class Telemetry:
         #: None until a frame arrives, then whatever the board said --
         #: including a negative, which means nothing is within range.
         self.range_cm = None
+        #: None until a frame carries them, so "no infrared fitted" and
+        #: "infrared sees nothing" stay different answers.
+        self.proximity = None
         self.wheels = (0.0, 0.0, 0.0, 0.0)
         self.stopped = True
         self.updated = 0.0
@@ -202,6 +205,8 @@ class SerialLink:
             tel.range_cm = range_cm
             tel.wheels = wheels
             tel.stopped = stopped
+            if len(parts) >= 9:
+                tel.proximity = (parts[7] == "1", parts[8] == "1")
             tel.updated = time.monotonic()
         elif parts[0] == "!":
             message = ",".join(parts[1:])
@@ -250,6 +255,7 @@ class SerialLink:
             "connected": self.connected and tel.fresh,
             "range_cm": None if tel.range_cm is None else round(tel.range_cm, 1),
             "wheels": [round(w, 3) for w in tel.wheels],
+            "proximity": tel.proximity,
             "messages": list(tel.messages[-3:]),
         }
 

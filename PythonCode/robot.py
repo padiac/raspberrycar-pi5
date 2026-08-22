@@ -28,7 +28,8 @@ from hal.camera import Camera
 from hal.gamepad import Gamepad
 from hal.supply import Supply
 from hal.sensors import (
-    FloorArray, PanServo, ProximityArray, RangeFinder, SerialRangeFinder,
+    FloorArray, PanServo, ProximityArray, RangeFinder, SerialProximity,
+    SerialRangeFinder,
 )
 from perception.clip import ClipRecorder
 from perception.pipeline import VisionPipeline
@@ -92,7 +93,11 @@ class Robot:
                 lambda: PanServo(self.link,
                                  trim=self.calibration.get("pan_trim")),
             )
-            self.proximity = None
+            self.proximity = _optional(
+                "side infrared (via ESP32)",
+                lambda: SerialProximity(
+                    self.link, fitted=bool(self.calibration.get("ir_fitted"))),
+            )
             self.floor = None
         else:
             self.pan = None
@@ -657,6 +662,14 @@ class Robot:
             "clip": self.clips.status() if self.clips else None,
             "gamepad": self.gamepad.status() if self.gamepad else None,
             "proximity": world.proximity.as_dict() if world.proximity else None,
+            # What the pins say regardless of whether they are trusted yet,
+            # so wiring can be checked by waving a hand at them.
+            "ir": (
+                {"fitted": self.proximity.fitted,
+                 "reporting": self.proximity.reporting,
+                 "pins": self.link.telemetry.proximity}
+                if isinstance(self.proximity, SerialProximity) else None
+            ),
             "floor": world.floor.as_dict() if world.floor else None,
             "stream_fps": round(self.vision.stream_fps, 1) if self.vision else 0.0,
             "detect_fps": round(self.vision.detect_fps, 1) if self.vision else 0.0,

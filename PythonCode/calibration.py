@@ -32,6 +32,11 @@ DEFAULTS = {
     #: so it costs more than driving straight and has its own floor.
     #: Zero means nobody has measured it, and nothing will be said.
     "turn_floor": 0.0,
+    #: Whether the side infrared is actually connected. False means the
+    #: pins are sitting at their pull-ups, and a pull-up reads exactly
+    #: like a clear road -- so until somebody has watched the numbers
+    #: change, the safety layer is not told about them.
+    "ir_fitted": False,
 }
 
 

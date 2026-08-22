@@ -243,6 +243,38 @@ class PanServo:
         }
 
 
+class SerialProximity:
+    """The side infrared, as reported by the ESP32.
+
+    Reads nothing itself: the pins are on the other board, for the same reason
+    the ultrasonic is. What this adds is the distinction between a sensor that
+    is not fitted and a sensor that sees nothing -- a distinction this project
+    has had to learn four separate times, always by watching a robot act
+    confidently on an absence.
+
+    `fitted` starts False so a pin that nobody has wired yet, sitting at its
+    pull-up, does not read as a clear road to the safety layer. Turn it on once
+    the readings can be seen changing.
+    """
+
+    def __init__(self, link, fitted=False):
+        self.link = link
+        self.fitted = fitted
+
+    @property
+    def reporting(self):
+        """True if the firmware is sending the fields at all."""
+        return self.link.telemetry.proximity is not None
+
+    def read(self):
+        if not self.fitted or not self.link.telemetry.fresh:
+            return None
+        pair = self.link.telemetry.proximity
+        if pair is None:
+            return None
+        return Proximity(left=pair[0], right=pair[1])
+
+
 class ProximityArray:
     """The two side-facing infrared obstacle sensors."""
 

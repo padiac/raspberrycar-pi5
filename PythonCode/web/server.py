@@ -142,6 +142,26 @@ def api_idle():
     return jsonify(after_s=robot.idle_camera_after)
 
 
+@app.route("/api/ir", methods=["POST"])
+def api_ir():
+    """Say whether the side infrared is actually connected.
+
+    Deliberately a decision somebody makes rather than something guessed. An
+    unwired pin sits at its pull-up and reads exactly like a clear road, so
+    the safety layer is told about these only once a person has watched them
+    change and said so.
+    """
+    if not hasattr(robot.proximity, "fitted"):
+        return jsonify(error="no serial proximity on this chassis"), 503
+    data = request.get_json(silent=True) or {}
+    if "fitted" in data:
+        robot.proximity.fitted = bool(data["fitted"])
+        robot.calibration.set("ir_fitted", robot.proximity.fitted)
+    return jsonify(fitted=robot.proximity.fitted,
+                   reporting=robot.proximity.reporting,
+                   pins=robot.link.telemetry.proximity)
+
+
 @app.route("/api/speed", methods=["POST"])
 def api_speed():
     """The one speed control: scales every behaviour, not just the d-pad."""
