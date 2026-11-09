@@ -14,6 +14,8 @@ from flask import (
     Flask, Response, jsonify, render_template, request, send_from_directory,
 )
 
+from diagnostics.logbook import book
+
 from hal import Velocity
 from robot import Robot
 
@@ -114,6 +116,8 @@ def api_pan():
         return jsonify(error="no pan servo"), 503
     data = request.get_json(silent=True) or {}
     try:
+        if "reversed" in data:
+            robot.set_pan_reversed(data["reversed"])
         if "trim" in data:
             robot.set_pan_trim(data["trim"])
         if "angle" in data:
@@ -142,6 +146,36 @@ def api_idle():
     return jsonify(after_s=robot.idle_camera_after)
 
 
+@app.route("/api/heading/zero", methods=["POST"])
+def api_zero_heading():
+    """Call the current heading zero, and re-measure the gyroscope's bias.
+
+    A gyroscope reads a small non-zero rate when nothing is moving, and
+    integrating that gives a heading that turns on its own. The car must be
+    still for this; the firmware cannot check that, so it is a thing somebody
+    asks for.
+    """
+    if robot.link is None:
+        return jsonify(error="no link"), 503
+    robot.link.zero_heading()
+    return jsonify(zeroed=True)
+
+
+@app.route("/api/pan/blind", methods=["POST"])
+def api_pan_blind():
+    """Measure what parts of the car the sensor can see.
+
+    Takes a few seconds and swings the head about, so it is asked for rather
+    than done on a timer, and it wants open space -- the method tells a
+    bracket from a wall only by being near and perfectly steady.
+    """
+    if robot.pan is None or robot.rangefinder is None:
+        return jsonify(error="no pan servo or rangefinder"), 503
+    if getattr(robot.behavior, "name", None) not in (None, "idle", "manual"):
+        return jsonify(error="stop the car first"), 409
+    return jsonify(blind=robot.calibrate_pan_blind())
+
+
 @app.route("/api/ir", methods=["POST"])
 def api_ir():
     """Say whether the side infrared is actually connected.
@@ -168,7 +202,7 @@ def api_speed():
     data = request.get_json(silent=True) or {}
     if "limit" in data:
         try:
-            robot.speed_limit = max(0.05, min(1.0, float(data["limit"])))
+            robot.set_speed_limit(data["limit"])
         except (TypeError, ValueError):
             return jsonify(error="limit must be a number"), 400
     return jsonify(limit=robot.speed_limit)
@@ -304,15 +338,16 @@ def api_drivetrain():
 @app.route("/api/safety", methods=["POST"])
 def api_safety():
     data = request.get_json(silent=True) or {}
-    if "enabled" in data:
-        robot.safety.enabled = bool(data["enabled"])
-    for key in ("stop_cm", "slow_cm"):
-        if key in data:
-            try:
-                setattr(robot.safety, key, float(data[key]))
-            except (TypeError, ValueError):
-                return jsonify(error=f"{key} must be a number"), 400
-    return jsonify(robot.safety.status())
+    try:
+        status = robot.set_safety(
+            enabled=data.get("enabled"),
+            stop_cm=data.get("stop_cm"),
+            slow_cm=data.get("slow_cm"),
+            bump_guard=data.get("bump_guard"),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(status)
 
 
 # -- camera and detection --------------------------------------------------
@@ -336,10 +371,18 @@ def api_detect():
     data = request.get_json(silent=True) or {}
     if "enabled" in data:
         robot.vision.set_detection(data["enabled"])
+        robot.preferences.set("detect_enabled", robot.vision.detect_enabled)
     if "conf" in data or "classes" in data:
         robot.detector.configure(
             confidence=data.get("conf"), classes=data.get("classes")
         )
+        if "conf" in data:
+            # Classes are not stored: an empty list means all eighty, which is
+            # the useful default, and a list of names saved from one session
+            # silently narrowing what the next one can see is a worse
+            # surprise than retyping it.
+            robot.preferences.set("detect_confidence",
+                                  robot.detector.confidence)
     if "target_fps" in data:
         try:
             robot.vision.detect_target_fps = max(0.0, min(60.0, float(data["target_fps"])))
@@ -444,6 +487,42 @@ def api_clip_delete(name):
     if not ok:
         return jsonify(error=message), 409
     return jsonify(message=message, clips=robot.clips.clips())
+
+
+@app.route("/api/log")
+def api_log():
+    """What the logbook holds, and optionally the tail of one file.
+
+    Reading the log from the page matters more on this machine than it looks:
+    journald here keeps nothing across a reboot, and the car has been
+    restarting by itself, so by the time somebody can ssh in the evidence is
+    gone. The file survives, and this is the shortest path to it.
+    """
+    status = book.status()
+    name = request.args.get("file", "car.log")
+    try:
+        lines = max(1, min(2000, int(request.args.get("lines", 200))))
+    except (TypeError, ValueError):
+        lines = 200
+    status["tail"] = book.tail(lines, name)
+    status["file"] = name
+    return jsonify(status)
+
+
+@app.route("/api/log/record", methods=["POST"])
+def api_log_record():
+    data = request.get_json(silent=True) or {}
+    if "enabled" in data:
+        robot.set_flight_recorder(data["enabled"])
+    return jsonify(book.status())
+
+
+@app.route("/api/log/sweep", methods=["POST"])
+def api_log_sweep():
+    removed = book.sweep()
+    status = book.status()
+    status["removed"] = removed
+    return jsonify(status)
 
 
 @app.route("/api/telemetry")

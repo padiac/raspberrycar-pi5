@@ -25,13 +25,16 @@
 //                  $H*CS                     heartbeat, keeps the watchdog fed
 //                  $E*CS                     stop now
 //                  $W,<fl>,<fr>,<rl>,<rr>*CS raw wheels, calibration only
+//                  $Z*CS                     zero the heading, car must be still
 //
-//   ESP32 -> Pi    $T,<range_cm>,<fl>,<fr>,<rl>,<rr>,<stopped>,<irL>,<irR>*CS
+//   ESP32 -> Pi    $T,<range_cm>,<fl>,<fr>,<rl>,<rr>,<stopped>,<irL>,<irR>,
+//                     <imu_ok>,<heading_deg>,<bumped>*CS
 //                  $!,<message>*CS           something went wrong
 //
 // range_cm is -1 when the sensor gave no echo.
 
 #include <ESP32Servo.h>
+#include <Wire.h>
 
 // ---- pins -----------------------------------------------------------------
 #define TRIG 2
@@ -52,6 +55,13 @@
 // than floating and inventing obstacles out of motor noise.
 #define IR_LEFT 13
 #define IR_RIGHT 15
+
+// MPU6050. I2C, so two bidirectional pins -- which rules out 34 to 39, and 12
+// is a strapping pin. 16 and 17 are what is left and they are unremarkable,
+// which is what you want from an I2C bus.
+#define IMU_SDA 16
+#define IMU_SCL 17
+#define IMU_ADDR 0x68
 // These modules pull their output LOW when something is in front of them.
 #define IR_DETECTED LOW
 
@@ -109,6 +119,121 @@ unsigned long gLastCommand = 0;
 unsigned long gLastHeartbeat = 0;
 float gRangeCm = -1;
 bool gIrLeft = false, gIrRight = false;
+
+// ---- inertial ---------------------------------------------------------------
+//
+// Two things are wanted from this and they are not the same thing.
+//
+// Heading, by integrating the rate of turn. That makes a turn closed-loop:
+// "keep turning until ninety degrees have gone by" instead of "turn for 1.1
+// seconds and hope", which is what the car does now and why it drives into
+// what it just decided to avoid. Integration drifts -- a few degrees a minute
+// -- so it is good for a manoeuvre and useless as a compass.
+//
+// And collisions, from the accelerometer. A car hitting something decelerates
+// hard for a few milliseconds, and that is visible even when the obstacle is
+// not: glass, a curtain, the side of a sofa. This is the bump switch the car
+// does not have, and it costs nothing extra now the chip is here.
+bool gImuOk = false;
+float gHeading = 0.0f;          // degrees, wraps at +/-180
+float gGyroBiasZ = 0.0f;        // counts, measured at startup
+float gAccelSmooth = 1.0f;      // g, slow average -- gravity plus the usual jostle
+unsigned long gBumpAt = 0;      // when the last jolt was seen
+//: How much the acceleration has to jump above its own recent average. A car
+//: this size arriving at a wall is several tenths of a g; the shake of driving
+//: over a threshold is well under one.
+const float BUMP_G = 0.45f;
+//: How long a jolt stays visible. The Pi reads telemetry at 20Hz and a
+//: collision lasts milliseconds, so it has to be held or it is never seen.
+const unsigned long BUMP_HOLD_MS = 400;
+const unsigned long IMU_PERIOD_MS = 10;    // 100Hz
+
+bool imuWrite(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(IMU_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool imuBegin() {
+  Wire.begin(IMU_SDA, IMU_SCL, 400000);
+  Wire.beginTransmission(IMU_ADDR);
+  Wire.write(0x75);                        // WHO_AM_I
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(IMU_ADDR, (uint8_t)1) != 1) return false;
+  uint8_t who = Wire.read();
+  if (who != 0x68 && who != 0x70) return false;   // 0x70 on some clones
+
+  if (!imuWrite(0x6B, 0x00)) return false;  // wake up
+  imuWrite(0x1B, 0x00);                     // gyro +/-250 deg/s, 131 LSB per deg/s
+  imuWrite(0x1C, 0x00);                     // accel +/-2g, 16384 LSB per g
+  imuWrite(0x1A, 0x03);                     // 44Hz filter: the motors vibrate
+  delay(50);
+  return true;
+}
+
+//: Read accel XYZ and gyro Z. Returns false if the chip stopped answering.
+bool imuRead(float *ax, float *ay, float *az, float *gz) {
+  Wire.beginTransmission(IMU_ADDR);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(IMU_ADDR, (uint8_t)14) != 14) return false;
+  int16_t raw[7];
+  for (int i = 0; i < 7; i++) raw[i] = (Wire.read() << 8) | Wire.read();
+  *ax = raw[0] / 16384.0f;
+  *ay = raw[1] / 16384.0f;
+  *az = raw[2] / 16384.0f;
+  *gz = raw[6];                             // counts; bias is in counts too
+  return true;
+}
+
+//: Average the rate of turn while the car is still, and call that zero.
+//
+// A gyroscope reads a small non-zero rate when nothing is moving, and
+// integrating that is a heading that rotates on its own -- degrees a minute,
+// which ruins a ninety degree turn. The car has to be still for this, which it
+// is at boot, and it can be redone with $Z when it is not.
+void imuZero() {
+  float ax, ay, az, gz, total = 0;
+  int taken = 0;
+  for (int i = 0; i < 200; i++) {
+    if (imuRead(&ax, &ay, &az, &gz)) { total += gz; taken++; }
+    delay(3);
+  }
+  if (taken > 50) gGyroBiasZ = total / taken;
+  gHeading = 0.0f;
+}
+
+void imuUpdate() {
+  static unsigned long last = 0;
+  unsigned long now = millis();
+  if (now - last < IMU_PERIOD_MS) return;
+  float dt = (now - last) / 1000.0f;
+  last = now;
+  // A chip on flying leads drops off the bus now and again, and latching it
+  // off until the next reboot means one twitch of a jumper costs the heading
+  // for the rest of the session. Keep knocking.
+  if (!gImuOk) {
+    static unsigned long lastTry = 0;
+    if (now - lastTry > 2000) { lastTry = now; gImuOk = imuBegin(); }
+    return;
+  }
+
+  float ax, ay, az, gz;
+  if (!imuRead(&ax, &ay, &az, &gz)) { gImuOk = false; return; }
+
+  // 131 counts per degree per second at this range.
+  gHeading += ((gz - gGyroBiasZ) / 131.0f) * dt;
+  while (gHeading > 180.0f) gHeading -= 360.0f;
+  while (gHeading < -180.0f) gHeading += 360.0f;
+
+  // Against its own recent average rather than against 1g, so the car can be
+  // on a slope, or the chip mounted at an angle, without every reading looking
+  // like a crash.
+  float magnitude = sqrtf(ax * ax + ay * ay + az * az);
+  if (fabsf(magnitude - gAccelSmooth) > BUMP_G) gBumpAt = now;
+  gAccelSmooth = gAccelSmooth * 0.98f + magnitude * 0.02f;
+}
 
 char gLine[96];
 uint8_t gLen = 0;
@@ -180,13 +305,15 @@ void sendLine(const char *body) {
 }
 
 void sendTelemetry() {
-  char body[112];
+  char body[160];
   // Appended, never inserted. The Pi accepts a T line with at least the
   // original seven fields and ignores the rest, so new firmware works
   // with old code and old firmware works with new.
-  snprintf(body, sizeof(body), "T,%.1f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d",
+  bool bumped = gBumpAt && (millis() - gBumpAt) < BUMP_HOLD_MS;
+  snprintf(body, sizeof(body), "T,%.1f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%.1f,%d",
            gRangeCm, gWheel[0], gWheel[1], gWheel[2], gWheel[3],
-           gStopped ? 1 : 0, gIrLeft ? 1 : 0, gIrRight ? 1 : 0);
+           gStopped ? 1 : 0, gIrLeft ? 1 : 0, gIrRight ? 1 : 0,
+           gImuOk ? 1 : 0, gHeading, bumped ? 1 : 0);
   sendLine(body);
 }
 
@@ -229,6 +356,18 @@ bool parseLine(char *line) {
       // drive away under a robot that had stopped thinking. Only a velocity
       // command counts as "still being driven".
       gLastHeartbeat = millis();
+      return true;
+    case 'Z':
+      // Re-zero the heading and re-measure the gyro bias. The car must be
+      // still; nothing here can check that, so it is asked for rather than
+      // done on a timer.
+      if (gImuOk) {
+        stopNow();
+        imuZero();
+        sendLine("!,heading zeroed");
+      } else {
+        sendLine("!,no imu");
+      }
       return true;
     case 'E':
       stopNow();
@@ -286,6 +425,9 @@ void setup() {
   pinMode(IR_LEFT, INPUT_PULLUP);
   pinMode(IR_RIGHT, INPUT_PULLUP);
 
+  gImuOk = imuBegin();
+  if (gImuOk) imuZero();
+
   ESP32PWM::allocateTimer(0);
   cam.setPeriodHertz(50);
   cam.attach(SERVO_PIN, 500, 2400);
@@ -320,6 +462,7 @@ void loop() {
 
   gIrLeft = digitalRead(IR_LEFT) == IR_DETECTED;
   gIrRight = digitalRead(IR_RIGHT) == IR_DETECTED;
+  imuUpdate();
 
   static unsigned long lastRange = 0;
   if (millis() - lastRange >= RANGE_PERIOD_MS) {

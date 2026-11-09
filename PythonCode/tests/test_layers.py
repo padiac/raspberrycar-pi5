@@ -87,7 +87,95 @@ check("differential fwd+turn keeps turning",
 print("\ndifferential ignores strafe (2-DOF chassis has no sideways axis)")
 check("strafe does nothing", diff.wheel_speeds(Velocity(vy=1)), [0, 0])
 
-print("\nsafety layer")
+print()
+print("no-echo resolution")
+
+from behaviors.patrol import (
+    PatrolBehavior as _Patrol, UNKNOWN_CM as _UNK, OPEN_UNKNOWN_CM as _OPEN)
+
+
+def _resolve(clearance, unknown):
+    p = _Patrol()
+    p.clearance = dict(clearance)
+    p.unknown = set(unknown)
+    return p._resolve_unknowns()
+
+# The emptiest direction in the room reports nothing at all, and used to score
+# below a wall an arm's length away.
+_r = _resolve({-90: 74.0, -45: 240.0, 0.0: None, 45: 77.0, 90: 103.0}, {0.0})
+check_eq("silence between two long readings is distance", _r[0.0], _OPEN)
+
+# A soft thing is wider than the beam, so its neighbours see it too.
+_r = _resolve({-90: 74.0, -45: 25.0, 0.0: None, 45: 30.0, 90: 103.0}, {0.0})
+check_eq("silence with something close beside it stays suspect", _r[0.0], _UNK)
+
+# Silence everywhere is a room with no wall within range -- the dead sensor
+# case is caught by the rule about going deaf, not here.
+_r = _resolve({a: None for a in (-90, -45, 0.0, 45, 90)},
+              {-90, -45, 0.0, 45, 90})
+check_eq("silence all round reads as open", _r[0.0], _OPEN)
+
+# Readings that were heard are left exactly as they were.
+_r = _resolve({-45: 25.0, 0.0: None, 45: 240.0}, {0.0})
+check_eq("a real reading is not touched", _r[-45], 25.0)
+
+print()
+print("pan servo travel")
+
+
+class _FakeLink:
+    def __init__(self):
+        self.sent = []
+
+    def send_servo(self, deg):
+        self.sent.append(deg)
+
+
+from hal.sensors import PanServo, CENTRE_DEG, PAN_LIMIT
+
+# Out and back has to land where it started. With any trim at all one side
+# reaches the end of the servo travel first, and a head that reports the angle
+# it was asked for rather than the one it reached accumulates that difference
+# on every relative move -- two steps out and two back miss the middle.
+for _trim in (0.0, 10.0, -25.0):
+    for _way in (45, -45):
+        _pan = PanServo(_FakeLink(), trim=_trim)
+        # Two steps is as far as the head goes, so this is the round trip a
+        # d-pad can actually make. Pressing a third time is pressing into the
+        # limit, and no amount of coming back undoes a press that never moved.
+        _n = int(_pan.limit / 45)
+        for _ in range(_n + 2):
+            _pan.nudge(_way)
+        for _ in range(_n):
+            _pan.nudge(-_way)
+        check_eq("trim %+.0f, %s: out to the stop and back is centred"
+                 % (_trim, "left" if _way < 0 else "right"), _pan.angle, 0.0)
+
+# Both sides have to reach the same distance, or one direction takes shorter
+# steps than the other and the head walks off centre.
+for _trim in (0.0, 10.0, -25.0):
+    _pan = PanServo(_FakeLink(), trim=_trim)
+    _right = _pan.look(PAN_LIMIT)
+    _left = _pan.look(-PAN_LIMIT)
+    check_eq("trim %+.0f: travel is symmetric" % _trim, _right, -_left)
+
+# And nothing may be commanded past what the servo can actually do.
+_link = _FakeLink()
+_pan = PanServo(_link, trim=20.0)
+for _a in (-90, -45, 0, 45, 90):
+    _pan.look(_a)
+check_eq("no command outside the servo range",
+         [d for d in _link.sent if d < 0 or d > 180], [])
+
+# A reversed head commands the other way but still reports the angle in the
+# car own sense, which is what the patrol sweep labels its readings with.
+_link = _FakeLink()
+_pan = PanServo(_link, reversed_=True)
+check_eq("reversed head reports the requested angle", _pan.look(45), 45.0)
+check_eq("  but commands the mirror of it", _link.sent[-1], CENTRE_DEG - 45)
+
+print()
+print("safety layer")
 safety = SafetyLayer(stop_cm=20, slow_cm=80)
 
 
@@ -122,6 +210,52 @@ check_eq("obstacle left: strafe right allowed", out.vy, 1.0)
 
 out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(left=True, right=True)))
 check_eq("boxed in: forward blocked", out.vx, 0.0)
+
+# One corner is enough. Requiring both meant the only thing the pair ever
+# objected to was a gap narrower than the car, while the collision that
+# actually happens -- clipping a table leg with one corner -- went unopposed.
+out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(left=True)))
+check_eq("left corner alone: forward blocked", out.vx, 0.0)
+out = safety.filter(Velocity(vx=1.0), world(prox=Proximity(right=True)))
+check_eq("right corner alone: forward blocked", out.vx, 0.0)
+out = safety.filter(Velocity(vx=1.0), world(prox=Proximity()))
+check_eq("corners clear: forward untouched", round(out.vx, 3), 1.0)
+
+# Escape has to survive the rule that stopped the car.
+out = safety.filter(Velocity(vx=-1.0), world(prox=Proximity(left=True, right=True)))
+check_eq("corners blocked: reversing still allowed", out.vx, -1.0)
+# Rotation is gated by which corner it drives forward. Turning right carries
+# the left corner forward, so a blocked left corner forbids it -- and permits
+# turning left, which withdraws that corner. Escape has to survive the rule
+# that stopped the car, or it wedges there.
+out = safety.filter(Velocity(omega=1.0), world(prox=Proximity(left=True)))
+check_eq("left corner blocked: turning right blocked", out.omega, 0.0)
+out = safety.filter(Velocity(omega=-1.0), world(prox=Proximity(left=True)))
+check_eq("  but turning left, which pulls it back, is allowed", out.omega, -1.0)
+out = safety.filter(Velocity(omega=-1.0), world(prox=Proximity(right=True)))
+check_eq("right corner blocked: turning left blocked", out.omega, 0.0)
+out = safety.filter(Velocity(omega=1.0), world(prox=Proximity(right=True)))
+check_eq("  but turning right is allowed", out.omega, 1.0)
+out = safety.filter(Velocity(vx=-1.0), world(prox=Proximity(left=True, right=True)))
+check_eq("both corners blocked: reversing is the way out", out.vx, -1.0)
+
+# The infrared writes into the same table the ultrasonic glance fills, which
+# is the whole of the integration: every rule already built on that table
+# starts working from the corners for free.
+print()
+print("infrared feeds the side memory")
+import time as _time
+from behaviors.patrol import PatrolBehavior, IR_ASSUMED_CM, SIDE_MEMORY_S
+_p = PatrolBehavior()
+_now = _time.monotonic()
+_p._note_infrared(world(prox=Proximity(left=True)), _now)
+check_eq("left corner recorded as close", _p._side(-1, _now), IR_ASSUMED_CM)
+check_eq("right side left alone", _p._side(1, _now), 999.0)
+check_eq("and it fades like any other sighting",
+         _p._side(-1, _now + SIDE_MEMORY_S + 0.1), 999.0)
+_p2 = PatrolBehavior()
+_p2._note_infrared(world(prox=None), _now)
+check_eq("no infrared fitted: nothing recorded", _p2._side(-1, _now), 999.0)
 
 print("\nnoticing that the wheels turn and the car does not move")
 # The safety layer cannot catch this. It refuses to drive at something close,

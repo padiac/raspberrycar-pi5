@@ -59,6 +59,17 @@ CLEAR_CM = 400.0
 #: close. An unknown is worth trying when the alternative is a wall you can
 #: see, and not worth trying when there is real space elsewhere.
 UNKNOWN_CM = 70.0
+#: How far a neighbouring angle must see before it will vouch for a no-echo
+#: one. A soft thing near enough to swallow the ping is not the width of the
+#: beam -- a sofa, a curtain, a coat -- so the angles either side of it
+#: usually see it too. Neighbours that both see a long way are evidence the
+#: silence is distance rather than absorption.
+UNKNOWN_VOUCH_CM = 60.0
+#: What a vouched-for silence is worth. Beyond the sensor's range is the most
+#: open thing it can report, and scoring it below a wall at arm's length --
+#: which is what happened -- steers the car away from the one direction with
+#: nothing in it at all.
+OPEN_UNKNOWN_CM = 250.0
 
 #: Driving at something and not getting closer to it.
 #:
@@ -110,6 +121,14 @@ TRAPPED_WINDOW_S = 12.0
 #: from.
 TRAPPED_REVERSE_S = 1.6
 TRAPPED_TURN_S = 2.2
+#: How much of that to actually hold, drawn anew on each escape.
+#
+# The full figure is about a half turn, which leaves the corner and then sends
+# the car back along the ground it just covered. Something between a quarter
+# and a half turn leaves just as surely and opens somewhere new, and varying
+# it means a corner that catches the car twice does not throw it out along the
+# same line both times.
+TRAPPED_TURN_SPREAD = (0.5, 0.9)
 
 #: Turning towards 90 degrees should turn further than towards 45, so the hold
 #: scales with how far round the chosen direction is.
@@ -158,6 +177,37 @@ SIDE_TURN_HOLD = 0.5
 #: used to be. After this long the thing measured is behind it, and steering
 #: away from it means steering into whatever is actually there now.
 SIDE_MEMORY_S = 3.0
+
+#: What distance to record when a corner infrared fires.
+#
+# The reading is a bare yes-or-no, so it has to be given a number to sit in
+# the same table as the ultrasonic.
+#
+# Measured on this car: seven to nine centimetres, tuned by turning the
+# sensitivity up to just short of where it latches. That point is a ceiling
+# rather than a setting. Turning the sensitivity past a point makes the output
+# latch on permanently, because the threshold has dropped below the light the
+# receiver picks up from its own emitter leaking across the board. The usable
+# band is whatever fits between that floor and the echo from a real target,
+# and the echo falls off with the square of the distance, so the band is
+# narrow and no amount of adjustment widens it. That is a different sensor
+# from the one the datasheets describe, and it changes what the thing is for.
+# These modules are reflective -- an infrared LED, a photodiode, a comparator
+# -- so the range they reach is a property of whatever is being looked at, not
+# of the module. A white wall gives one figure and a dark sofa gives a
+# fraction of it, because dark surfaces simply do not return the light.
+#
+# At eight centimetres there is still no avoiding, only stopping -- but the
+# stopping is now comfortable rather than marginal. The car covers that in
+# about a quarter of a second at cruise and the loop runs at 20Hz, so by
+# the time this fires the useful responses are the abrupt ones. It is closer
+# in kind to the accelerometer's collision detection than to the ultrasonic --
+# a whisker, not a rangefinder, earning its place by being the one thing that
+# reports just before contact rather than just after.
+#
+# Written below SIDE_CLOSE_CM so it lands on the stop-and-turn branch rather
+# than the lean-gently-away one, which would be useless at this range.
+IR_ASSUMED_CM = 8.0
 REVERSE_SPEED = 0.5
 REVERSE_HOLD = 0.7
 
@@ -211,6 +261,7 @@ class PatrolBehavior(Behavior):
 
     def update(self, robot, world):
         now = time.monotonic()
+        self._note_infrared(world, now)
 
         if self.scan is not None:
             return self._sweep(robot, world, now)
@@ -238,11 +289,18 @@ class PatrolBehavior(Behavior):
                 # letting it repeat.
                 return self._start_looking(robot, now)
             if what == "turn_back":
+                # Far enough round to leave the corner, not so far as to set
+                # off back down the line the car came in on. A half turn does
+                # escape, and then retraces known ground -- which for a robot
+                # with no map is the one thing it can be sure is a waste. The
+                # amount is drawn fresh each time so that two escapes from the
+                # same corner do not follow the same line out.
+                held = TRAPPED_TURN_S * random.uniform(*TRAPPED_TURN_SPREAD)
                 return self._commit(
                     robot, now,
                     Velocity(omega=random.choice((-1.0, 1.0))
                              * self._enough(robot, TURN_SPEED)),
-                    TRAPPED_TURN_S, "cornered -- turning round")
+                    held, "cornered -- turning away")
 
         # Ask the safety layer what happened to our last request rather than
         # reading the sensors again here -- it already decided, and duplicating
@@ -330,6 +388,71 @@ class PatrolBehavior(Behavior):
         values = [p[1] for p in recent]
         return max(values) - min(values) < NO_PROGRESS_CM
 
+    def _note_infrared(self, world, now):
+        """Let the corner sensors write into the same table as the ultrasonic.
+
+        This is the whole of the integration, and it is deliberately small.
+        Rather than a second set of rules that has to be kept in step with the
+        first, the infrared writes into `sides` -- the one place this behaviour
+        keeps what it believes is beside the car -- and every rule already
+        built on that table starts working from it for free: leaning away, the
+        stop-and-turn when something is close, the memory that keeps an
+        obstacle real for a few seconds after it leaves view.
+
+        The two sensors are complementary in exactly the way that matters
+        here. The ultrasonic is long, narrow, quantitative and slow: it glances
+        aside once every GLANCE_EVERY_S and the car covers real ground blind in
+        between. The infrared is short, wide, binary and continuous. Pouring
+        the second into the table the first fills is what closes that gap.
+        """
+        prox = world.proximity
+        if prox is None:
+            return
+        if prox.left:
+            self.sides[-1] = (IR_ASSUMED_CM, now)
+        if prox.right:
+            self.sides[1] = (IR_ASSUMED_CM, now)
+
+    def _resolve_unknowns(self):
+        """Decide what each no-echo angle was, using the ones beside it.
+
+        Silence from an ultrasonic has two causes that look identical: open
+        space past the four metres it reaches, and something soft close enough
+        to swallow the ping. Treating every silence as a soft thing was the
+        fix for a car that drove into sofas, and it brought its own fault --
+        the emptiest direction in the room scores below a wall an arm's length
+        away, so the car turns away from the only way that was actually open.
+
+        The angles either side settle it. A sofa is wider than the beam and
+        shows up in its neighbours; four metres of empty floor does not. So a
+        silence flanked by long readings is taken as distance, and one with
+        anything close beside it stays suspect.
+
+        Used for choosing a direction and nowhere else. The checks that ask
+        whether there is room to turn keep the pessimistic figure, because
+        being wrong there means turning into something rather than declining
+        to drive somewhere.
+        """
+        angles = sorted(self.clearance)
+        resolved = dict(self.clearance)
+        for index, angle in enumerate(angles):
+            if angle not in self.unknown:
+                continue
+            beside = [self.clearance[angles[j]]
+                      for j in (index - 1, index + 1)
+                      if 0 <= j < len(angles) and angles[j] not in self.unknown]
+            # Nothing measured anywhere means the whole sweep heard silence,
+            # which indoors is a room with no wall within range in any
+            # direction -- or a sensor that has stopped answering, and that is
+            # caught separately by the rule about going deaf.
+            if not beside or min(beside) >= UNKNOWN_VOUCH_CM:
+                resolved[angle] = OPEN_UNKNOWN_CM
+            else:
+                # Stated rather than left as it was found, so this returns a
+                # figure for every angle whatever the caller stored.
+                resolved[angle] = UNKNOWN_CM
+        return resolved
+
     def _side(self, which, now):
         """How far away the last thing seen on that side was, if still relevant."""
         seen = self.sides.get(which)
@@ -401,6 +524,10 @@ class PatrolBehavior(Behavior):
 
         angle = SCAN_ANGLES[index]
         reading = world.range_cm
+        if world.range_blind:
+            # Looking at the car itself. Scoring that as an obstacle is what
+            # condemned a whole side of the chassis every sweep.
+            reading = None
         if reading is None or reading <= 0:
             # Heard nothing. That is not a measurement of open space, it is
             # the absence of a measurement, and indoors the commonest cause
@@ -467,13 +594,14 @@ class PatrolBehavior(Behavior):
         # than the widest opening is how it kept aiming at slots it could not
         # fit through.
         angles = sorted(self.clearance)
+        clearance = self._resolve_unknowns()
         scores = {}
         for index, angle in enumerate(angles):
             if angle == 0.0:
                 continue
             if self.avoid and angle == self.avoid[0] and now < self.avoid[1]:
                 continue        # this way out was tried and did not work
-            around = [self.clearance[angles[j]]
+            around = [clearance[angles[j]]
                       for j in (index - 1, index, index + 1)
                       if 0 <= j < len(angles)]
             scores[angle] = min(around)
@@ -490,7 +618,7 @@ class PatrolBehavior(Behavior):
         # randomly rather than always choosing the same side of it.
         rivals = [a for a, s in scores.items() if s > best_score - 5.0]
         best = random.choice(rivals)
-        room = self.clearance[best]
+        room = clearance[best]
 
         # Remember it, so if this fails the next decision does not repeat it.
         self.avoid = (best, now + TRAPPED_WINDOW_S)

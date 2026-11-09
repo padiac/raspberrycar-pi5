@@ -27,6 +27,14 @@ PATH = os.path.join(
 #: wrong by however much it did not.
 DEFAULTS = {
     "pan_trim": 0.0,
+    #: Whether the head turns the opposite way to the commanded sign. Depends
+    #: on how the servo linkage was assembled, so it cannot be assumed.
+    "pan_reversed": False,
+    #: The nearest thing each pan angle can see when the room is empty, keyed
+    #: by angle as a string. Not a setting: it is a measurement of what parts
+    #: of this car are in the sensor's way, which depends entirely on where
+    #: the wiring was routed and changes whenever that does.
+    "pan_blind": {},
     #: Duty cycle below which a commanded turn does not turn the car.
     #: Rotating in place fights the rollers on all four mecanum wheels,
     #: so it costs more than driving straight and has its own floor.

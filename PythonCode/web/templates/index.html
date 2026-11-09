@@ -569,6 +569,7 @@
   <div class="row" id="trimrow" hidden>
     <label>aim trim</label><span class="val" id="trimval">0&deg;</span>
     <input type="range" id="trim" min="-30" max="30" value="0" step="1">
+    <button class="toggle" id="panrev">--</button>
   </div>
   <p class="hint" id="panhint" hidden>The ultrasonic rides on a servo. A horn
     only fits its spline every few degrees, so the trim is what makes the
@@ -593,6 +594,31 @@
   <div id="bstatus"></div>
   <div id="safety">safety layer: idle</div>
   <pre id="tree"></pre>
+</div>
+
+<div class="panel">
+  <h2>Reflexes <em>what it refuses to do</em></h2>
+  <div class="row">
+    <label>stop under</label><span class="val" id="stopval">20cm</span>
+    <input type="range" id="stopcm" min="5" max="60" value="20" step="1">
+  </div>
+  <div class="row">
+    <label>slow under</label><span class="val" id="slowval">40cm</span>
+    <input type="range" id="slowcm" min="10" max="200" value="40" step="5">
+  </div>
+  <div class="row">
+    <label>on contact</label>
+    <button class="toggle" id="bumpguard">--</button>
+    <span class="val" id="bumpstate" style="color:var(--muted);font-weight:500"></span>
+  </div>
+  <p class="hint">Stopping distance sets the first one, so it is not the knob
+    to turn when the car feels over-protective -- the second one is. Between
+    the two the car is throttled in proportion to the room left, which at
+    200cm means it is throttled all the time in an apartment and holding the
+    trigger down does nothing. On contact: a jolt the accelerometer felt
+    blocks forward travel for about a second. <em>auto</em> does that only
+    while a behaviour is driving, on the grounds that a person felt the same
+    collision themselves and does not need their controls frozen.</p>
 </div>
 
 <div class="panel">
@@ -627,6 +653,27 @@
 </div>
 
 <div class="panel">
+  <h2>Inertial &amp; infrared</h2>
+  <div class="tel">
+    <div><span>Heading</span><b id="heading">--</b></div>
+    <div><span>Jolt</span><b id="jolt">--</b></div>
+    <div><span>IR left</span><b id="irl">--</b></div>
+    <div><span>IR right</span><b id="irr">--</b></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button class="toggle" id="zeroh">Zero the heading</button>
+    <button class="toggle" id="irtrust">--</button>
+  </div>
+  <p class="hint">Heading is integrated from the gyroscope, so it drifts a few
+    degrees a minute: good for one manoeuvre, useless as a compass. Zero it with
+    the car still. Jolt is the accelerometer noticing a collision &mdash; the bump
+    switch this car does not have, and the only thing aboard that can see glass
+    or a curtain. The infrared is reported but not acted on until you have
+    watched both sides change and said so, because an unwired pin sits at its
+    pull-up and reads exactly like a clear road.</p>
+</div>
+
+<div class="panel">
   <h2>Diagnostics</h2>
   <div class="tel">
     <div><span>Range</span><b id="range">--</b></div>
@@ -640,6 +687,13 @@
     <div><span>Stream</span><b id="sfps">--</b></div>
     <div><span>Detect</span><b id="dfps">--</b></div>
     <div><span>Gamepad</span><b id="gp">none</b></div>
+    <!-- Both of these exist because a fault was invisible until it was
+         counted. The servo twitching by itself once an hour was the ESP32
+         rebooting and re-centring the head; forty kilobytes of noise with no
+         newline in it was the boot ROM talking at another baud rate, and it
+         had quietly deafened the link. -->
+    <div><span>Board resets</span><b id="reboots">0</b></div>
+    <div><span>Line noise</span><b id="garbage">0</b></div>
   </div>
   <div class="row" style="margin-top:14px">
     <button class="toggle danger" id="poweroff">⏻ Shut down the Pi</button>
@@ -647,6 +701,26 @@
   </div>
   <canvas id="spark" width="800" height="92" title="range over the last 30 seconds"></canvas>
   <p class="hint" id="hw"></p>
+</div>
+
+<div class="panel">
+  <h2>Logs <em id="logfree"></em></h2>
+  <div class="row">
+    <button class="toggle" id="flight">flight recorder</button>
+    <button class="toggle" id="logsweep">sweep now</button>
+    <span class="val" id="logsize" style="color:var(--muted);font-weight:500"></span>
+  </div>
+  <details id="logbox">
+    <summary style="cursor:pointer;color:var(--muted);margin:8px 0">recent log</summary>
+    <pre id="logtail" style="max-height:260px;overflow:auto;font-size:11px"></pre>
+  </details>
+  <p class="hint">Rotating files with a fixed ceiling, so the card cannot be
+    filled even if nobody ever sweeps. The flight recorder adds a row of
+    machine-readable state a few times a second, but only when something
+    changed -- standing still costs almost nothing, and the interesting
+    seconds come out dense. Worth turning on before a patrol run and off
+    afterwards. These survive a reboot, which the system journal on this Pi
+    does not.</p>
 </div>
 
 <!-- Before the script, not after it. Everything below runs the moment it
@@ -671,6 +745,8 @@ const pulse = $('pulse'), speed = $('speed');
 let vx = 0, vy = 0, om = 0, lastMoving = false;
 let activeBehavior = null, padActive = false;
 let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
+let bumpGuard = 'auto', flightOn = false;
+const GUARDS = ['off', 'auto', 'always'];
 let detections = [], currentTarget = null;
 
 speed.oninput = () => $('speedval').textContent = speed.value + '%';
@@ -702,6 +778,11 @@ $('pancentre').onclick = () => {
 };
 $('trim').oninput = () => $('trimval').textContent = $('trim').value + '\u00b0';
 $('trim').onchange = () => post('/api/pan', {trim: +$('trim').value});
+// Which way the head runs is a fact about how the linkage was assembled, so it
+// is flipped here and stored, not compiled in. Read the current state off the
+// button rather than keeping a copy, so it cannot drift out of step.
+$('panrev').onclick = () =>
+  post('/api/pan', {reversed: !$('panrev').classList.contains('on')});
 // The trim is a property of the car, not of this browser, so take the
 // robot's value once rather than pushing this page's default over it.
 let panSynced = false;
@@ -717,6 +798,8 @@ function renderPan(p) {
   if (!panSynced) {
     panSynced = true;
     $('pan').value = p.angle;  $('panval').textContent = aimText(p.angle);
+    $('panrev').textContent = p.reversed ? 'head reversed' : 'head normal';
+    $('panrev').classList.toggle('on', !!p.reversed);
     $('trim').value = p.trim;  $('trimval').textContent = p.trim + '\u00b0';
   }
   $('panaim').textContent = p.settled ? aimText(p.angle) : 'moving\u2026';
@@ -874,6 +957,58 @@ function applySafety(on) { safetyOn = on; $('safebtn').classList.toggle('on', on
 $('cambtn').onclick = async () => { const r = await post('/api/camera', {enabled: !cameraOn}); if (r && !r.error) applyCamera(r.enabled); };
 $('detbtn').onclick = async () => { const r = await post('/api/detect', {enabled: !detectOn}); if (r && !r.error) applyDetect(r.enabled); };
 $('safebtn').onclick = async () => { const r = await post('/api/safety', {enabled: !safetyOn}); if (r && !r.error) applySafety(r.enabled); };
+
+// Thresholds: show the number while dragging, send it on release. Sending on
+// every input event would put sixty writes of preferences.json through a
+// single drag of the slider.
+$('stopcm').oninput = () => { $('stopval').textContent = $('stopcm').value + 'cm'; };
+$('slowcm').oninput = () => { $('slowval').textContent = $('slowcm').value + 'cm'; };
+$('stopcm').onchange = () => post('/api/safety', {stop_cm: +$('stopcm').value});
+$('slowcm').onchange = () => post('/api/safety', {slow_cm: +$('slowcm').value});
+$('bumpguard').onclick = async () => {
+  const next = GUARDS[(GUARDS.indexOf(bumpGuard) + 1) % GUARDS.length];
+  const r = await post('/api/safety', {bump_guard: next});
+  if (r && r.bump_guard) bumpGuard = r.bump_guard;
+};
+
+$('flight').onclick = async () => {
+  const r = await post('/api/log/record', {enabled: !flightOn});
+  if (r) showLog(r);
+};
+$('logsweep').onclick = async () => {
+  const r = await post('/api/log/sweep', {});
+  if (r) showLog(r);
+};
+
+function showLog(st) {
+  flightOn = !!st.recording;
+  $('flight').classList.toggle('on', flightOn);
+  $('flight').textContent = flightOn
+    ? 'flight recorder · ' + st.rows + ' rows' : 'flight recorder';
+  $('logsize').textContent = (st.bytes / 1024).toFixed(0) + 'kB of '
+    + (st.ceiling / 1048576).toFixed(0) + 'MB ceiling';
+  $('logfree').textContent = st.free_mb + 'MB free on the card';
+  if (st.tail) $('logtail').textContent = st.tail.join('\n');
+}
+
+// Only while the section is open: tailing a log nobody is reading is two
+// network round trips a second spent on nothing.
+async function pollLog() {
+  const open = $('logbox').open;
+  try {
+    const r = await fetch('/api/log?lines=' + (open ? 150 : 1));
+    const st = await r.json();
+    showLog(st);
+    if (open && st.tail) {
+      const pre = $('logtail');
+      const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+      pre.textContent = st.tail.join('\n');
+      if (atEnd) pre.scrollTop = pre.scrollHeight;
+    }
+  } catch (e) { /* the car went away; the next tick will say so */ }
+}
+setInterval(pollLog, 4000);
+pollLog();
 
 $('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
 $('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});
@@ -1130,6 +1265,19 @@ function renderObjects(d) {
   }
 }
 
+// ---- inertial and infrared ----------------------------------------------
+let joltAt = 0;
+$('zeroh').onclick = async () => {
+  await fetch('/api/heading/zero', {method: 'POST'});
+};
+$('irtrust').onclick = async () => {
+  // Read the current state from what is on screen rather than keeping a copy,
+  // so the button cannot drift out of step with the robot.
+  const on = $('irtrust').classList.contains('on');
+  await fetch('/api/ir', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({fitted: !on})});
+};
+
 // ---- range sparkline ----------------------------------------------------
 const history = [];
 const HISTORY = 60;           // 60 samples at 2 Hz == the last 30 seconds
@@ -1199,6 +1347,28 @@ async function telemetry() {
       : (sf.enabled === false ? 'safety layer disabled — nothing is being clamped'
                               : 'safety layer: clear');
 
+    // The reflex thresholds, unless a finger is on the slider: writing to a
+    // control somebody is dragging fights them twice a second.
+    if (sf.stop_cm !== undefined && document.activeElement !== $('stopcm')) {
+      $('stopcm').value = Math.round(sf.stop_cm);
+      $('stopval').textContent = Math.round(sf.stop_cm) + 'cm';
+    }
+    if (sf.slow_cm !== undefined && document.activeElement !== $('slowcm')) {
+      $('slowcm').value = Math.round(sf.slow_cm);
+      $('slowval').textContent = Math.round(sf.slow_cm) + 'cm';
+    }
+    if (sf.bump_guard) {
+      bumpGuard = sf.bump_guard;
+      $('bumpguard').textContent = 'contact: ' + bumpGuard;
+      $('bumpguard').classList.toggle('on', bumpGuard !== 'off');
+    }
+    $('bumpstate').textContent = sf.bump_active ? 'holding after a knock' : '';
+
+    const lk = d.link || {};
+    $('reboots').textContent = lk.reboots === undefined ? '--' : lk.reboots;
+    $('garbage').textContent = !lk.garbage ? '0'
+      : (lk.garbage > 1024 ? (lk.garbage / 1024).toFixed(1) + 'kB' : lk.garbage + 'B');
+
     // video overlays
     detections = d.objects || [];
     $('stage').classList.toggle('pickable', detections.length > 0);
@@ -1220,6 +1390,28 @@ async function telemetry() {
     $('om').textContent = a.omega.toFixed(2);
     $('prox').textContent = d.proximity ? (d.proximity.left ? 'L' : '·') + ' ' + (d.proximity.right ? 'R' : '·') : '--';
     $('floor').textContent = d.floor ? (d.floor.left ? '1' : '0') + ' ' + (d.floor.right ? '1' : '0') : '--';
+    const imu = d.imu || {};
+    $('heading').textContent = imu.heading === null || imu.heading === undefined
+      ? '--' : imu.heading.toFixed(1) + '°';
+    // A collision lasts milliseconds and the page polls twice a second, so the
+    // firmware holds the flag. Hold it a little longer here too, or it can
+    // still blink past between two frames.
+    if (imu.bumped) joltAt = Date.now();
+    const hot = Date.now() - joltAt < 1500;
+    $('jolt').textContent = hot ? 'HIT' : '--';
+    $('jolt').style.color = hot ? 'var(--bad)' : '';
+    const ir = d.ir;
+    for (const [id, i] of [['irl', 0], ['irr', 1]]) {
+      const el = $(id);
+      if (!ir || !ir.pins) { el.textContent = '--'; el.style.color = ''; continue; }
+      const blocked = ir.pins[i];
+      el.textContent = blocked ? 'BLOCKED' : 'clear';
+      el.style.color = blocked ? 'var(--warn)' : 'var(--ok)';
+    }
+    if (ir) {
+      $('irtrust').textContent = ir.fitted ? 'Trusted — stop trusting' : 'Trust these';
+      $('irtrust').classList.toggle('on', !!ir.fitted);
+    }
     $('sfps').textContent = d.camera_enabled ? (d.stream_fps || '--') : 'off';
     $('dfps').textContent = d.detect_enabled ? (d.detect_fps || '...') : 'off';
 

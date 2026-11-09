@@ -11,14 +11,16 @@ from .base import Behavior
 #: at whatever it was last told.
 COMMAND_TIMEOUT = 0.6
 
-#: Turning is scaled down against driving, because the camera cannot keep up
-#: with it. A pan across a room at full rate smears every frame -- the exposure
-#: is long enough indoors that anything moving that fast is a streak -- and the
-#: recording is unwatchable exactly where something interesting is happening.
+#: How much of a requested turn to actually give, under manual control.
 #:
-#: Driving forward at the same speed is fine: the scene grows rather than
-#: sweeping, so the image stays sharp.
-TURN_SCALE = 0.5
+#: This was halved for a while so the recording stayed watchable -- a pan
+#: across a room at full rate smears every frame, because the exposure indoors
+#: is long enough that anything moving that fast is a streak. Driving forward
+#: is fine at any speed, since the scene grows rather than sweeping.
+#:
+#: Back to full at the driver request: the slider is the one governor now, and
+#: a slider at 100 percent that still turns at half is a lie about itself.
+TURN_SCALE = 1.0
 
 
 class IdleBehavior(Behavior):
@@ -37,6 +39,9 @@ class ManualBehavior(Behavior):
     description = "You drive: touch buttons, WASD or a gamepad."
     category = "control"
     requires = ("motors",)
+    # Somebody is watching, so the trigger on the pad may reach past the
+    # speed limit here. Nowhere else.
+    hand_driven = True
 
     def __init__(self):
         self.wanted = Velocity.STOP
@@ -60,13 +65,16 @@ class ManualBehavior(Behavior):
         if not self.wanted.omega:
             return self.wanted
 
-        # Halved, but not into nothing. At a limit of 0.40 a full stick comes
-        # to exactly the duty these motors start turning at, so scaling
-        # without the floor would make the slowest useful turn the fastest
-        # impossible one.
+        # Order matters here, and getting it wrong is invisible until the
+        # scale reaches 1.0. Scaling may only ever slow a turn down, so the
+        # request caps it -- but the floor may speed it up, because below the
+        # duty these motors start turning at the car does not turn at all, and
+        # a stick pushed a little should move the car a little rather than
+        # produce a stall. So cap first against what was asked for, then raise
+        # to the floor. Capping last silently undoes the floor.
         gentle = abs(self.wanted.omega) * TURN_SCALE
-        gentle = robot.enough_to_turn(gentle)
         gentle = min(gentle, abs(self.wanted.omega))
+        gentle = robot.enough_to_turn(gentle)
         return Velocity(
             vx=self.wanted.vx, vy=self.wanted.vy,
             omega=gentle if self.wanted.omega > 0 else -gentle,

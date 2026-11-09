@@ -49,6 +49,23 @@ MAX_SECONDS = 900
 #: not a lost video, it is a robot that will not boot.
 MIN_FREE_BYTES = 800 * 1024 * 1024
 
+#: Most the recordings may occupy between them, oldest deleted first.
+#:
+#: Capping each clip, which is all this used to do, bounds one recording and
+#: not the collection: twenty of them at the per-clip limit is eight
+#: gigabytes, and the only brake was a refusal to start a new one once the
+#: card was nearly full. That is not a bound, it is a card that fills to the
+#: last 800MB and then stops being useful, with the oldest footage -- the
+#: least likely to matter -- holding the space.
+#:
+#: Dashcams all settled on the same answer and it is the right one: a fixed
+#: budget, and the oldest goes to make room. Generous here, because a clip is
+#: evidence somebody chose to keep and this deletes it without being asked.
+CLIP_BUDGET_BYTES = 2 * 1024 * 1024 * 1024
+
+#: And a count, so that a hundred tiny clips are also bounded.
+CLIP_KEEP = 40
+
 #: Below this, what was produced is not a video. Players differ on whether
 #: they show a frozen frame or simply refuse, so it is deleted and said so
 #: rather than handed over as a file that will not open.
@@ -76,6 +93,9 @@ class ClipRecorder:
         self.process = None
         self.path = None
         self.started_at = None
+        # Once at startup, which catches a card that filled up while an
+        # older version of this code was in charge of it.
+        self.prune()
         self.frames_written = 0
         self.error = None
         self._thread = None
@@ -224,6 +244,10 @@ class ClipRecorder:
         self.process = None
         self.path = None
         self.started_at = None
+        # After the file is finished, not before: pruning while it is still
+        # being written would count the space the new clip is taking against
+        # the collection and could delete something to make room for itself.
+        self.prune()
 
     def close(self):
         if self.process is not None:
@@ -256,6 +280,34 @@ class ClipRecorder:
             })
         out.sort(key=lambda c: c["name"], reverse=True)
         return out
+
+    def prune(self):
+        """Delete the oldest clips until the collection is inside its budget.
+
+        Oldest first, by the timestamp in the name, which is how clips() sorts
+        them. The file currently being written is never a candidate -- it has
+        no index yet and is the one somebody is most likely to want.
+
+        Says what it deleted. Removing a recording the human asked for is not
+        something to do quietly, and if the budget is wrong the log is where
+        that will show.
+        """
+        clips = [c for c in self.clips() if not c["recording"]]
+        clips.sort(key=lambda c: c["name"])          # oldest first
+        total = sum(c["bytes"] for c in clips)
+        removed = []
+        while clips and (total > CLIP_BUDGET_BYTES or len(clips) > CLIP_KEEP):
+            oldest = clips.pop(0)
+            try:
+                os.remove(os.path.join(self.directory, oldest["name"]))
+            except OSError:
+                continue
+            total -= oldest["bytes"]
+            removed.append(oldest["name"])
+        if removed:
+            print("[clip] budget reached, removed %s"
+                  % ", ".join(removed), flush=True)
+        return removed
 
     def resolve(self, name):
         """Full path for a clip name, or None if that is not a clip here.
@@ -315,5 +367,8 @@ class ClipRecorder:
             "seconds": seconds,
             "frames": self.frames_written if recording else 0,
             "free_mb": free_mb,
+            "budget_mb": CLIP_BUDGET_BYTES // (1024 * 1024),
+            "used_mb": round(sum(c["bytes"] for c in self.clips())
+                             / (1024 * 1024), 1),
             "error": self.error,
         }

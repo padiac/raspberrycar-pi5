@@ -173,6 +173,11 @@ CENTRE_DEG = 90
 #: the head is looking backwards down the side of the car, which tells you
 #: nothing about where it is going.
 PAN_LIMIT = 90
+#: What the servo itself can do. Commands outside this do not fail, they just
+#: stop early, silently, and only on the side that runs out -- which is how a
+#: head with any trim on it ends up with two different step sizes.
+SERVO_MIN_DEG = 0
+SERVO_MAX_DEG = 180
 #: A hobby servo has no feedback, so the only honest way to know it has
 #: arrived is to wait. These are generous; a wrong reading is worse than a
 #: slow one.
@@ -197,26 +202,89 @@ class PanServo:
     implementation detail and stays inside this class.
     """
 
-    #: Flip to -1 if the head turns the opposite way to the commanded sign.
-    #: Which way a servo runs depends on how the linkage was put together, and
-    #: this project has already been caught twice by an assumed sign.
-    DIRECTION = 1
-
-    def __init__(self, link, trim=0.0):
+    def __init__(self, link, trim=0.0, reversed_=False):
         self.link = link
         self.trim = float(trim)
+        # Which way the head runs depends on how the linkage was put together,
+        # so it is a fact about this assembly rather than a constant -- and it
+        # is stored and flipped from outside for the same reason the trim is.
+        #
+        # Getting it wrong is worse than it looks. It is not only that the
+        # manual controls feel mirrored: the patrol sweep labels every reading
+        # with the angle it believes it took it at, so a reversed head fills
+        # the clearance table with a mirror image of the room and then steers
+        # confidently by it, into the thing it just measured.
+        self.reversed = bool(reversed_)
         self.angle = 0.0
         self._arrived = 0.0
         self.look(0)
 
+    @property
+    def direction(self):
+        return -1 if self.reversed else 1
+
+    @property
+    def limit(self):
+        """How far either way the head can actually go.
+
+        Trim shifts the whole range rather than widening it, so the room left
+        on the two sides is not the same, and the smaller one governs both.
+        Clamping each side independently instead would give a head whose left
+        and right steps are different sizes -- which is what it did, and what
+        made two presses out and two back miss the middle.
+        """
+        centre = CENTRE_DEG + self.trim
+        return min(PAN_LIMIT, SERVO_MAX_DEG - centre, centre - SERVO_MIN_DEG)
+
+    def nudge(self, step):
+        """Move one step, landing on a grid rather than accumulating.
+
+        A d-pad asks for a relative move, and relative moves are how error
+        gets kept: clip one of them at the limit and the shortfall stays in
+        the position for good, so the way back out is a different set of
+        angles from the way in. Snapping to multiples of the step throws that
+        away each time -- the head occupies a fixed set of positions, and
+        going out and back always returns to the one it started from.
+        """
+        step = float(step)
+        if not step:
+            return self.angle
+        step = abs(step) * (1 if step > 0 else -1)
+        grid = abs(step)
+        # The reachable positions are the grid points, not the grid points
+        # plus wherever the limit happens to fall. A limit that sits between
+        # two of them is worse than a nearer limit: the head stops there, the
+        # way back starts from an angle that is not on the grid, and a step
+        # gets swallowed rounding to the nearest one.
+        reach = int(self.limit / grid) * grid
+        target = round((self.angle + step) / grid) * grid
+        return self.look(max(-reach, min(reach, target)))
+
     def look(self, angle):
-        """Aim the head. Returns the angle actually taken up."""
-        angle = max(-PAN_LIMIT, min(PAN_LIMIT, float(angle)))
+        """Aim the head. Returns the angle actually taken up.
+
+        The angle that comes back is the one the servo can really reach, not
+        the one that was asked for, and the difference matters. Trim shifts the
+        whole range, so with any trim at all one side runs out of travel before
+        the other; storing the request instead of the result gives a head whose
+        two directions have different step sizes and which does not come back
+        to the middle after going out and back. Believing the request is how
+        the error compounds -- every relative move is measured from a position
+        the head was never in.
+        """
+        limit = self.limit
+        angle = max(-limit, min(limit, float(angle)))
+        command = CENTRE_DEG + self.trim + self.direction * angle
+
         travel = abs(angle - self.angle)
         self.angle = angle
         self._arrived = time.monotonic() + max(SETTLE_MIN_S, travel * SETTLE_PER_DEG)
-        self.link.send_servo(CENTRE_DEG + self.trim + self.DIRECTION * angle)
+        self.link.send_servo(command)
         return self.angle
+
+    def set_reversed(self, reversed_):
+        self.reversed = bool(reversed_)
+        return self.look(self.angle)      # re-aim so the change is visible
 
     def centre(self):
         return self.look(0)
@@ -238,6 +306,7 @@ class PanServo:
         return {
             "angle": round(self.angle, 1),
             "trim": round(self.trim, 1),
+            "reversed": self.reversed,
             "settled": self.settled,
             "forward": self.looking_forward,
         }

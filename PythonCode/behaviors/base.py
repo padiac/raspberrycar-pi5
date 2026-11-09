@@ -41,6 +41,11 @@ class Behavior:
     #: rather than a fresh intention, so the speed limit does not apply to
     #: it twice. Replay is the only such case.
     governed = True
+    #: Whether somebody is steering this. The trigger on the pad lifts the
+    #: speed limit, and the justification for letting it -- that the person
+    #: holding the pad can see the car -- only holds while that person is the
+    #: one driving. A behaviour driving itself is governed by the slider.
+    hand_driven = False
 
     def start(self, robot):
         """Called once when this behaviour becomes active."""

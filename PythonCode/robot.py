@@ -21,6 +21,8 @@ import time
 
 from behaviors import build_behaviors
 from calibration import Calibration
+from preferences import Preferences
+from diagnostics.logbook import book
 from control import PathRecorder, SafetyLayer
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
@@ -78,6 +80,12 @@ class Robot:
         # moment it is constructed, and aiming it at a remembered angle is
         # the whole point.
         self.calibration = Calibration()
+        #: Measurements and choices are kept apart on purpose; see the top of
+        #: either file. Both are read here, before any hardware exists, so
+        #: that nothing is constructed with a default somebody overrode
+        #: months ago.
+        self.preferences = Preferences()
+        self.speed_limit = self.preferences.get("speed_limit")
         self.drivetrain = _optional("drivetrain", build_drivetrain)
 
         # When an ESP32 is driving, the sensors wired to it come back over the
@@ -90,8 +98,10 @@ class Robot:
             )
             self.pan = _optional(
                 "pan servo",
-                lambda: PanServo(self.link,
-                                 trim=self.calibration.get("pan_trim")),
+                lambda: PanServo(
+                    self.link,
+                    trim=self.calibration.get("pan_trim"),
+                    reversed_=bool(self.calibration.get("pan_reversed"))),
             )
             self.proximity = _optional(
                 "side infrared (via ESP32)",
@@ -99,6 +109,7 @@ class Robot:
                     self.link, fitted=bool(self.calibration.get("ir_fitted"))),
             )
             self.floor = None
+            self.link.on_reconnect = self._link_came_back
         else:
             self.pan = None
             self.rangefinder = _optional("rangefinder", RangeFinder)
@@ -120,7 +131,12 @@ class Robot:
                 os.path.abspath(__file__))), "clips"),
             camera_off=lambda: not (self.camera and self.camera.enabled),
         ) if self.vision else None
-        self.safety = SafetyLayer()
+        self.safety = SafetyLayer(
+            stop_cm=self.preferences.get("stop_cm"),
+            slow_cm=self.preferences.get("slow_cm"),
+            enabled=self.preferences.get("safety_enabled"),
+            bump_guard=self.preferences.get("bump_guard"),
+        )
         self.recorder = PathRecorder()
         # Costs no wiring: the Pi already measures the rail it runs on.
         self.supply = _optional("supply monitor", Supply)
@@ -186,6 +202,27 @@ class Robot:
         self.lock = threading.RLock()
         self.running = True
         threading.Thread(target=self._control_loop, daemon=True).start()
+
+        # Last, because every one of these touches something built above and
+        # two of them need the control loop to have somewhere to write.
+        self._restore_preferences()
+
+    def _restore_preferences(self):
+        """Apply the stored choices that depend on optional hardware.
+
+        Separate from reading the file, which happens first thing, because a
+        preference about the detector cannot be applied before there is a
+        detector -- and on a car with no camera plugged in there never will
+        be, which is a reason to skip the setting and not to fail.
+        """
+        if self.detector is not None:
+            self.detector.configure(
+                confidence=self.preferences.get("detect_confidence"))
+        if self.vision is not None and self.preferences.get("detect_enabled"):
+            self.vision.set_detection(True)
+            print("[prefs] object detection on, as last set", flush=True)
+        if self.preferences.get("flight_recorder"):
+            book.record(self.flight_row)
 
     # -- capabilities -------------------------------------------------------
 
@@ -404,10 +441,97 @@ class Robot:
         """Nudge the sensor head. Returns where it ended up, or None."""
         if self.pan is None:
             return None
-        return self.pan.look(self.pan.angle + float(degrees))
+        return self.pan.nudge(float(degrees))
 
     def pan_centre(self):
         return self.pan.centre() if self.pan else None
+
+    def _link_came_back(self, was_reset):
+        """Put back the state that lives on the far end of the serial link.
+
+        Velocity looks after itself: the control loop sends one every tick and
+        the firmware stops on its own if it hears nothing. The servo does not.
+        A hobby servo has no feedback, so the only record of where the head is
+        pointing is the number this side remembers -- and a firmware that has
+        just booted has centred the head without telling anyone. Left alone,
+        every range reading after a reset is filed under an angle the head is
+        not at, and the scan table quietly becomes fiction.
+        """
+        if not was_reset or self.pan is None:
+            return
+        self.pan.look(self.pan.angle)
+        print("[hw] board reset, re-aimed head to %.0f deg" % self.pan.angle, flush=True)
+
+    #: How near a reading has to be to the recorded floor to count as looking
+    #: at the car rather than past it. Wide enough for the centimetre or two
+    #: of jitter a rigid target still produces, narrow enough that a real
+    #: obstacle at a similar distance is not waved away.
+    BLIND_MARGIN_CM = 3.0
+    #: Nothing further than this is taken to be part of the car. Furniture
+    #: standing still during the calibration would otherwise be recorded as a
+    #: permanent blind spot and then ignored for the rest of the car's life.
+    BLIND_MAX_CM = 40.0
+    #: A rigid target attached to the chassis gives the same figure every
+    #: time. Anything that wanders more than this is the room, not the car.
+    BLIND_SPREAD_CM = 4.0
+
+    def blind_at(self, angle):
+        """The floor for that angle, or None if nothing was recorded."""
+        blind = self.calibration.get("pan_blind") or {}
+        if angle is None or not blind:
+            return None
+        nearest = min(blind, key=lambda k: abs(float(k) - angle))
+        if abs(float(nearest) - angle) > 10.0:
+            return None
+        return float(blind[nearest])
+
+    def calibrate_pan_blind(self, samples=9, dwell=0.9, angles=None):
+        """Learn what parts of the car the sensor can see, angle by angle.
+
+        Wants open space around it, because the method cannot tell a bracket
+        from a wall except by distance and steadiness -- so anything far off
+        or wavering is discarded rather than recorded.
+
+        What this buys is the difference between "there is an obstacle that
+        way" and "I cannot see that way". A wire eighteen centimetres from the
+        head reads as an obstacle at every sweep, drags down the score of the
+        angles either side of it, and quietly condemns that whole side of the
+        car for good -- the way out is always somewhere else, and the room the
+        car will not enter is not blocked at all.
+        """
+        if self.pan is None or self.rangefinder is None:
+            return None
+        angles = angles or (-90.0, -45.0, 0.0, 45.0, 90.0)
+        found = {}
+        for angle in angles:
+            self.pan.look(angle)
+            time.sleep(dwell)
+            taken = []
+            for _ in range(samples):
+                reading = self.link.telemetry.range_cm if self.link else None
+                if reading is not None and reading > 0:
+                    taken.append(reading)
+                time.sleep(0.12)
+            if len(taken) < samples * 0.6:
+                continue                      # heard nothing: sees past itself
+            taken.sort()
+            median = taken[len(taken) // 2]
+            if median > self.BLIND_MAX_CM:
+                continue                      # too far to be part of the car
+            if taken[-1] - taken[0] > self.BLIND_SPREAD_CM:
+                continue                      # wandering, so it is the room
+            found[str(int(angle))] = round(median, 1)
+        self.pan.centre()
+        self.calibration.set("pan_blind", found)
+        return found
+
+    def set_pan_reversed(self, reversed_):
+        """Say which way the head runs, and remember it."""
+        if self.pan is None:
+            return None
+        self.pan.set_reversed(reversed_)
+        self.calibration.set("pan_reversed", self.pan.reversed)
+        return self.pan.reversed
 
     def set_pan_trim(self, trim):
         """Aim the head, and remember where forward turned out to be.
@@ -473,8 +597,41 @@ class Robot:
         below the duty these motors turn at, lowering it further does not make
         a slower car, it makes a stopped one.
         """
-        self.speed_limit = max(0.10, min(1.0, self.speed_limit + delta))
+        return self.set_speed_limit(self.speed_limit + delta)
+
+    def set_speed_limit(self, value):
+        """Set the governor and remember it.
+
+        Remembering is the point. This used to live only in memory, so an
+        evening of driving at one speed was undone by the next restart, which
+        came back at the class default and gave no sign that it had.
+        """
+        self.speed_limit = max(0.10, min(1.0, float(value)))
+        self.preferences.set("speed_limit", self.speed_limit)
         return self.speed_limit
+
+    def set_safety(self, enabled=None, stop_cm=None, slow_cm=None,
+                   bump_guard=None):
+        """Change the reflex layer and remember it. Returns its status."""
+        changes = {}
+        if enabled is not None:
+            self.safety.enabled = bool(enabled)
+            changes["safety_enabled"] = self.safety.enabled
+        for key, raw in (("stop_cm", stop_cm), ("slow_cm", slow_cm)):
+            if raw is None:
+                continue
+            value = self.preferences.set(key, raw)
+            if value is None:
+                raise ValueError("%s out of range" % key)
+            setattr(self.safety, key, value)
+        if bump_guard is not None:
+            value = self.preferences.set("bump_guard", bump_guard)
+            if value is None:
+                raise ValueError("bump_guard must be off, auto or always")
+            self.safety.bump_guard = value
+        if changes:
+            self.preferences.update(changes)
+        return self.safety.status()
 
     #: Video recording will not change state faster than this. Starting and
     #: stopping both take a moment -- spawning ffmpeg, and waiting for it to
@@ -562,6 +719,15 @@ class Robot:
             except Exception:  # noqa: BLE001
                 pass
 
+        # A reading that matches what this angle sees with the room empty is
+        # the car's own hardware. Not clear and not blocked: unseen.
+        range_angle = self.pan.angle if self.pan else 0.0
+        blind = False
+        if range_cm is not None and range_cm > 0:
+            floor_cm = self.blind_at(range_angle)
+            if floor_cm is not None and range_cm <= floor_cm + self.BLIND_MARGIN_CM:
+                blind = True
+
         looking_forward = self.pan.looking_forward if self.pan else True
         if looking_forward and range_cm is not None:
             self._forward_cm = range_cm
@@ -572,6 +738,7 @@ class Robot:
         return WorldState(
             dt=dt, frame=frame, frame_size=size, detections=detections,
             range_cm=range_cm, proximity=proximity, floor=floor,
+            range_blind=blind,
             range_expected=self.rangefinder is not None,
             forward_cm=self._forward_cm,
             forward_age=forward_age,
@@ -580,7 +747,55 @@ class Robot:
             # is the honest default rather than a convenient one.
             range_angle=self.pan.angle if self.pan else None,
             range_forward=self.pan.looking_forward if self.pan else True,
+            # The one obstacle reading that is never a false positive about
+            # whether something is there: the car is touching it.
+            bumped=bool(self.link.telemetry.bumped) if self.link else False,
         )
+
+    def flight_row(self):
+        """One flat row for the flight recorder.
+
+        Flat and small on purpose: a CSV column per number, nothing nested,
+        nothing that needs parsing to plot. These are the values that have
+        actually been wanted while chasing a fault -- what was asked for,
+        what was allowed, what the sensors said, and whether the reflex layer
+        stepped in -- and a column stays even when it is empty so that the
+        header does not change under a reader halfway down the file.
+        """
+        allowed, requested = self.allowed, self.requested
+        tel = self.link.telemetry if self.link else None
+        report = self.safety.last
+        return {
+            "mode": self.behavior.name if self.behavior else "",
+            "req_vx": round(requested.vx, 3),
+            "req_vy": round(requested.vy, 3),
+            "req_w": round(requested.omega, 3),
+            "vx": round(allowed.vx, 3),
+            "vy": round(allowed.vy, 3),
+            "w": round(allowed.omega, 3),
+            "range_cm": "" if tel is None or tel.range_cm is None else round(tel.range_cm, 1),
+            "pan": round(self.pan.angle, 1) if self.pan else "",
+            "ir_l": "" if tel is None or tel.proximity is None else int(tel.proximity[0]),
+            "ir_r": "" if tel is None or tel.proximity is None else int(tel.proximity[1]),
+            "heading": "" if tel is None or tel.heading is None else round(tel.heading, 1),
+            "bump": "" if tel is None else int(tel.bumped),
+            "reboots": self.link.board_reboots if self.link else "",
+            "limit": round(self.speed_limit, 2),
+            # Semicolons, because this is going into a comma-separated file
+            # and a reason that splits itself across columns is worse than
+            # no reason at all.
+            "why": "; ".join(report.interventions),
+        }
+
+    def set_flight_recorder(self, on):
+        """Start or stop the flight recorder, and remember the choice."""
+        on = bool(on)
+        if on:
+            book.record(self.flight_row)
+        else:
+            book.stop_recording()
+        self.preferences.set("flight_recorder", on)
+        return book.recording
 
     def _drive(self, velocity):
         self.allowed = velocity
@@ -601,9 +816,23 @@ class Robot:
                     self.world = world
                     requested = self.behavior.update(self, world)
                     if self.behavior.governed:
-                        requested = requested.scaled(
-                            max(self.speed_limit, self.boost))
+                        # The trigger reaches past the slider only for a
+                        # behaviour somebody is steering. It used to apply to
+                        # every one of them, so a trigger resting a little off
+                        # zero -- or a thumb brushing it -- silently overrode
+                        # the governor while the car was driving itself, which
+                        # looks from outside like the car deciding to bolt.
+                        ceiling = self.speed_limit
+                        if self.behavior.hand_driven:
+                            ceiling = max(ceiling, self.boost)
+                        requested = requested.scaled(ceiling)
                     self.requested = requested
+                    # Whether a person is at the controls is not a property of
+                    # the world, so it is handed over rather than smuggled
+                    # into WorldState. It decides only one thing: whether a
+                    # felt collision freezes forward travel, which a human who
+                    # felt the same collision does not need done for them.
+                    self.safety.human_driving = self.behavior.hand_driven
                     self._drive(self.safety.filter(requested, world))
                     self.behavior_error = None
                     # Record what reached the wheels rather than what was asked
@@ -664,6 +893,11 @@ class Robot:
             "proximity": world.proximity.as_dict() if world.proximity else None,
             # What the pins say regardless of whether they are trusted yet,
             # so wiring can be checked by waving a hand at them.
+            "imu": (
+                {"heading": self.link.telemetry.heading,
+                 "bumped": self.link.telemetry.bumped}
+                if self.link else None
+            ),
             "ir": (
                 {"fitted": self.proximity.fitted,
                  "reporting": self.proximity.reporting,
@@ -671,6 +905,17 @@ class Robot:
                 if isinstance(self.proximity, SerialProximity) else None
             ),
             "floor": world.floor.as_dict() if world.floor else None,
+            # The serial link itself, which was never reported. Its counters
+            # are the only place a fault that comes and goes leaves a mark:
+            # how many times the board has restarted by itself, and how many
+            # bytes arrived that were not lines. Both were invisible, and an
+            # invisible intermittent fault is one nobody can be told about.
+            "link": self.link.status() if self.link else None,
+            # The logbook is deliberately NOT here. This runs twice a second
+            # and its status walks the log directory, so putting it in the
+            # main poll would buy a stat() of every rotated file for every
+            # tick of a page nobody may even be looking at. It has its own
+            # endpoint, polled far more slowly by the panel that wants it.
             "stream_fps": round(self.vision.stream_fps, 1) if self.vision else 0.0,
             "detect_fps": round(self.vision.detect_fps, 1) if self.vision else 0.0,
             "detect_enabled": self.vision.detect_enabled if self.vision else False,

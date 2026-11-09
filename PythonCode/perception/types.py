@@ -61,8 +61,14 @@ class WorldState:
                                         # taken looking forward
     forward_age: float = None           # how many seconds ago, or None if
                                         # there has never been one
+    range_blind: bool = False           # the head is looking at part of the
+                                        # car, so this says nothing about the
+                                        # room beyond it
     proximity: Proximity = None         # side infrared
     floor: Floor = None                 # downward line sensors
+    bumped: bool = False                # the accelerometer felt a jolt
+                                        # recently; the firmware holds it
+                                        # long enough to survive a 20Hz poll
 
     def __post_init__(self):
         """Fill in the forward reading when the caller only gave a range.

@@ -12,7 +12,15 @@ Environment:
     CAR_PORT         default 8000
 """
 
-from web.server import main
+# Before anything else prints: from here on every print lands in a rotating
+# file as well as on stdout. journald on this Pi is volatile and the car has
+# been rebooting on its own, which destroys exactly the log that would
+# explain the reboot.
+from diagnostics.logbook import book
+
+book.install()
+
+from web.server import main  # noqa: E402 - must come after the log is up
 
 if __name__ == "__main__":
     main()

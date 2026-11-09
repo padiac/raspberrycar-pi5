@@ -20,6 +20,8 @@ both.
 
 from dataclasses import dataclass, field
 
+import time
+
 from hal import Velocity
 
 #: Closer than this (cm) and forward motion is refused entirely.
@@ -60,6 +62,19 @@ NO_ECHO_CEILING = 0.22
 #: than this is treated exactly as it was before: no reading, no forward.
 FORWARD_MEMORY_S = 1.0
 
+#: How long a jolt keeps forward travel shut after it is felt.
+#:
+#: The accelerometer already knew about collisions and nothing was listening:
+#: a bump lit a box on the web page and changed no decision anywhere. That is
+#: the one sensor reading that is never a false alarm about whether an
+#: obstacle exists -- the car is touching it.
+#:
+#: Short, because this is a reflex and not a plan. It buys the layer above
+#: one second to notice the contact and decide where to go instead, which is
+#: its job; a reflex that held for five seconds would be making that decision
+#: by default.
+BUMP_FREEZE_S = 1.2
+
 
 @dataclass
 class SafetyReport:
@@ -83,17 +98,37 @@ class SafetyReport:
 
 
 class SafetyLayer:
-    def __init__(self, stop_cm=STOP_CM, slow_cm=SLOW_CM, enabled=True):
+    def __init__(self, stop_cm=STOP_CM, slow_cm=SLOW_CM, enabled=True,
+                 bump_guard="auto"):
         self.stop_cm = stop_cm
         self.slow_cm = slow_cm
         self.enabled = enabled
+        #: "off", "auto" or "always". See preferences.py for what they mean;
+        #: the short version is that "auto" trusts a human to have noticed
+        #: the collision themselves and does not trust a behaviour to.
+        self.bump_guard = bump_guard
+        #: Set by the owner each tick, because whether a person is driving is
+        #: a fact about the control stack and not about the world, and
+        #: smuggling it into WorldState to avoid one assignment would make
+        #: WorldState a lie.
+        self.human_driving = False
         self.last = SafetyReport()
+        self._bumped_at = None
+
+    @property
+    def bump_active(self):
+        """Whether a felt jolt is currently holding the car back."""
+        if self._bumped_at is None:
+            return False
+        return (time.monotonic() - self._bumped_at) < BUMP_FREEZE_S
 
     def status(self):
         return {
             "enabled": self.enabled,
             "stop_cm": self.stop_cm,
             "slow_cm": self.slow_cm,
+            "bump_guard": self.bump_guard,
+            "bump_active": self.bump_active,
             **self.last.as_dict(),
         }
 
@@ -159,10 +194,18 @@ class SafetyLayer:
                     reasons.append(f"obstacle {distance:.0f}cm ahead, forward limited")
                     vx = ceiling
 
-        # -- side clearance, from the infrared pair -------------------------
-        # These only see to the sides, so they gate strafing rather than
-        # forward travel. On a 2-DOF chassis vy is discarded downstream
-        # anyway, which is harmless.
+        # -- the front corners, from the infrared pair -----------------------
+        #
+        # These sit where the ultrasonic cannot help. Its cone is about fifteen
+        # degrees wide and the car is wider than that, so a chair leg off the
+        # bow is invisible to it until a wheel finds it -- and it is aimed one
+        # way at a time, so while it is looking left it is not looking anywhere
+        # else. The infrared is fixed, instant, and covers exactly that.
+        #
+        # So a blocked corner stops forward travel, one corner being enough.
+        # Waiting for both, as this used to, means the only obstacle it ever
+        # objected to was a gap narrower than the car -- and clipping a table
+        # leg with one corner is the collision that actually happens.
         proximity = world.proximity
         if proximity is not None:
             if vy < 0 and proximity.left:
@@ -171,12 +214,65 @@ class SafetyLayer:
             if vy > 0 and proximity.right:
                 reasons.append("obstacle to the right, strafe blocked")
                 vy = 0.0
-            # Something touching both sides means a gap too narrow to drive
-            # into; hold position rather than wedging the car.
-            if vx > 0 and proximity.left and proximity.right:
-                reasons.append("blocked both sides, forward blocked")
+            if vx > 0 and (proximity.left or proximity.right):
+                where = ("both corners" if proximity.left and proximity.right
+                         else "left corner" if proximity.left else "right corner")
+                reasons.append(f"{where} blocked, forward blocked")
+                vx = 0.0
+            # Turning is gated too, one direction at a time.
+            #
+            # Spinning on the spot does not move the corners together: the
+            # forward speed of a point on the chassis is omega times how far
+            # that point sits to the side of centre, so the two front corners
+            # advance in opposite directions. Turning right carries the left
+            # corner forward and pulls the right corner back.
+            #
+            # Which gives a rule that needs to know nothing about where these
+            # sensors are aimed -- a fact worth having, since a knock is enough
+            # to change that: forbid the rotation that drives a blocked corner
+            # forward, and permit the one that withdraws it.
+            #
+            # Escape survives, which is the property that matters. A blocked
+            # left corner can still turn left and can still reverse; only with
+            # both corners blocked does everything but reverse close, and
+            # backing out is the right answer there anyway.
+            if omega > 0 and proximity.left:
+                reasons.append("left corner blocked, turning right blocked")
+                omega = 0.0
+            if omega < 0 and proximity.right:
+                reasons.append("right corner blocked, turning left blocked")
+                omega = 0.0
+
+        # -- contact, from the accelerometer ---------------------------------
+        #
+        # Last, because it is the only input here that is not about an
+        # obstacle ahead but about one already met, and because it overrides
+        # a clear reading: the ultrasonic can be reporting two metres of open
+        # road while a chair leg the beam missed entirely is against the
+        # bumper. That is the exact case the other two checks cannot cover.
+        #
+        # It removes motion and does not add any, so it keeps the rule this
+        # layer is built on. Only forward: reversing off whatever was hit is
+        # the way out, and turning away from it has to stay possible too, so
+        # neither is touched.
+        if world.bumped:
+            self._bumped_at = time.monotonic()
+        if self._blocking_bump():
+            if vx > 0:
+                reasons.append("just hit something, forward blocked")
                 vx = 0.0
 
         allowed = Velocity(vx, vy, omega)
         self.last = SafetyReport(requested, allowed, reasons)
         return allowed
+
+    def _blocking_bump(self):
+        if self.bump_guard == "off":
+            return False
+        if self.bump_guard == "auto" and self.human_driving:
+            # A person felt the same collision through the floor and is
+            # already reacting; freezing their controls for a second fights
+            # them. An autonomous behaviour felt nothing and would keep
+            # pushing, which is what this exists to stop.
+            return False
+        return self.bump_active

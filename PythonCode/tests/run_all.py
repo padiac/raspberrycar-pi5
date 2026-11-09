@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SUITES = ["test_layers.py", "test_tree.py", "test_link.py", "test_follow.py"]
+SUITES = ["test_layers.py", "test_tree.py", "test_link.py", "test_follow.py",
+          "test_housekeeping.py"]
 
 failed = []
 for name in SUITES:
