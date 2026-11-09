@@ -197,6 +197,18 @@ class Robot:
         self.behavior_error = None
         self.world = WorldState()
 
+        #: Who has the page open, by address, with when they were last seen.
+        #:
+        #: There is no login here and no notion of whose turn it is: every
+        #: client can drive, all of them share one set of sliders, and the
+        #: first key anybody presses pulls the car out of whatever it was
+        #: doing into manual. That is a reasonable design for a car on a home
+        #: network and a bad one to be unaware of, and the failure it leads to
+        #: is not two people fighting over the controls -- it is a phone left
+        #: open in a pocket. Counting them does not arbitrate anything. It
+        #: just means the thing that happens is visible.
+        self.peers = {}
+
         self._clip_toggle_lock = threading.RLock()
         self._clip_toggled_at = 0.0
         self.lock = threading.RLock()
@@ -752,6 +764,34 @@ class Robot:
             bumped=bool(self.link.telemetry.bumped) if self.link else False,
         )
 
+    #: A client that has not asked for telemetry in this long has closed the
+    #: tab, gone to sleep or walked out of wifi range. The page polls twice a
+    #: second, so this is a dozen missed polls: long enough not to flicker
+    #: over one dropped request, short enough that a closed tab stops being
+    #: counted before anybody wonders who the third person is.
+    PEER_TIMEOUT_S = 6.0
+
+    def note_peer(self, address):
+        """Remember that this address is watching. Called from the poll."""
+        if not address:
+            return
+        now = time.monotonic()
+        with self.lock:
+            self.peers[address] = now
+            for seen, when in list(self.peers.items()):
+                if now - when > self.PEER_TIMEOUT_S:
+                    del self.peers[seen]
+
+    def peer_list(self):
+        now = time.monotonic()
+        with self.lock:
+            fresh = [
+                {"address": seen, "quiet_s": round(now - when, 1)}
+                for seen, when in self.peers.items()
+                if now - when <= self.PEER_TIMEOUT_S
+            ]
+        return sorted(fresh, key=lambda peer: peer["address"])
+
     def flight_row(self):
         """One flat row for the flight recorder.
 
@@ -874,6 +914,7 @@ class Robot:
                 "camera_slept": self.camera_slept,
                 "watchers": self.stream_clients,
             },
+            "peers": self.peer_list(),
             "path": self.recorder.status(),
             "drivetrain": (
                 {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),

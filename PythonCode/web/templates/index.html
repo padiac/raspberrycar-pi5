@@ -513,6 +513,10 @@
   <span class="chip" id="safechip">safety</span>
   <span class="chip warn" id="aimchip" hidden>sensor turned away</span>
   <span class="chip" id="idlechip" hidden>camera asleep</span>
+  <!-- Shown only when somebody else is here. Nothing is arbitrated: every
+       page can drive, and the first key anybody presses pulls the car into
+       manual. The case this is really for is a phone left open in a pocket. -->
+  <span class="chip warn" id="peerchip" hidden></span>
   <span class="chip bad" id="powerchip" hidden>power</span>
   <button id="help" title="What the controls do">?</button>
   <button id="theme" title="Switch theme">◐</button>
@@ -1363,6 +1367,14 @@ async function telemetry() {
       $('bumpguard').classList.toggle('on', bumpGuard !== 'off');
     }
     $('bumpstate').textContent = sf.bump_active ? 'holding after a knock' : '';
+
+    const peers = d.peers || [];
+    const pc = $('peerchip');
+    pc.hidden = peers.length < 2;
+    if (!pc.hidden) {
+      pc.textContent = peers.length + ' pages connected';
+      pc.title = 'any of them can drive, and they share one set of controls \u2014 ' + peers.map(p => p.address + ' (' + p.quiet_s + 's ago)').join(', ');
+    }
 
     const lk = d.link || {};
     $('reboots').textContent = lk.reboots === undefined ? '--' : lk.reboots;

@@ -527,6 +527,9 @@ def api_log_sweep():
 
 @app.route("/api/telemetry")
 def api_telemetry():
+    # Every open page polls this, so it is where clients announce
+    # themselves without needing a session of their own.
+    robot.note_peer(request.remote_addr)
     return jsonify(robot.telemetry())
 
 
