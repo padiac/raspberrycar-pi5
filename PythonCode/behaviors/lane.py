@@ -6,6 +6,8 @@ same information onto a handful of discrete manoeuvres, so the car switched
 between hard turns; a continuous error lets it ease into bends instead.
 """
 
+from settings import Spec, group
+
 from perception.lane import LaneFinder
 from perception.lane import draw as draw_lane
 
@@ -20,6 +22,24 @@ MAX_TURN = 0.9
 SEARCH_TURN = 0.5
 SEARCH_CRAWL = 0.2
 
+
+#: The register entry for the numbers above, which keep their
+#: explanations and become the defaults.
+LINE = group(
+    "lane",
+    cruise=Spec(
+        CRUISE, unit='', bounds=(0.0, 1.0),
+        help='Forward speed while following a line.'),
+    max_turn=Spec(
+        MAX_TURN, unit='', bounds=(0.0, 1.0),
+        help='Hardest correction it will apply.'),
+    search_turn=Spec(
+        SEARCH_TURN, unit='', bounds=(0.0, 1.0),
+        help='How hard it turns while hunting for a lost line.'),
+    search_crawl=Spec(
+        SEARCH_CRAWL, unit='', bounds=(0.0, 1.0),
+        help='And how fast it creeps while hunting.'),
+)
 
 class LaneBehavior(Behavior):
     name = "lane"
@@ -60,15 +80,15 @@ class LaneBehavior(Behavior):
             # usually picks it up again on the far side of a bend.
             self.state = "lane lost, searching"
             direction = 1.0 if self.last_offset > 0 else -1.0
-            return Velocity(vx=SEARCH_CRAWL, omega=direction * SEARCH_TURN)
+            return Velocity(vx=LINE.search_crawl, omega=direction * LINE.search_turn)
 
         self.last_offset = reading.offset
         omega = -self.pid.update(reading.offset, world.dt)
-        omega = max(-MAX_TURN, min(MAX_TURN, omega))
+        omega = max(-LINE.max_turn, min(LINE.max_turn, omega))
 
         # Ease off the faster we are turning, so bends do not throw the car
         # out of the lane.
-        vx = CRUISE * (1.0 - 0.5 * min(1.0, abs(omega)))
+        vx = LINE.cruise * (1.0 - 0.5 * min(1.0, abs(omega)))
         self.state = f"offset {reading.offset:+.2f} ({reading.rows_seen} rows)"
         return Velocity(vx=vx, omega=omega)
 

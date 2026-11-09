@@ -15,7 +15,6 @@ absent, behaviours that need it cannot be selected, and the rest still runs --
 which matters while the motor board is still in the post.
 """
 
-import os
 import threading
 import time
 
@@ -25,12 +24,8 @@ from settings import Spec, group, settings
 from diagnostics.logbook import KEEPING, book
 from control import PathRecorder, SafetyLayer
 from control.turning import TurnTracker
-import hal
 from hal import Velocity, build_drivetrain
-from hal.drivetrain import DRIVETRAINS
 from hal.gamepad import Gamepad
-from perception.pipeline import VisionPipeline
-from perception.clip import ClipRecorder
 from perception.detector_settings import LOOKING
 from perception.pipeline import SIGHT
 from perception.types import WorldState

@@ -24,6 +24,8 @@ at all, and a follow behaviour that stops working when one sensor goes quiet
 is worse than one that gets vaguer.
 """
 
+from settings import Spec, group
+
 import cv2
 
 from control import PID
@@ -61,6 +63,42 @@ MAX_STRAFE = 0.5
 LOST_PATIENCE = 8
 
 
+#: The register entry for the numbers above, which keep their
+#: explanations and become the defaults.
+CHASE = group(
+    "follow",
+    standoff_cm=Spec(
+        STANDOFF_CM, unit='cm', bounds=(5.0, 300.0),
+        help='How far behind the target it tries to sit when a range reading is available.'),
+    distance_deadband_cm=Spec(
+        DISTANCE_DEADBAND_CM, unit='cm', bounds=(0.0, 100.0),
+        help='How far off that it tolerates before correcting.'),
+    target_fill=Spec(
+        TARGET_FILL, unit='', bounds=(0.05, 1.0),
+        help='How much of the frame the target should fill when no range reading exists.'),
+    fill_deadband=Spec(
+        FILL_DEADBAND, unit='', bounds=(0.0, 0.5),
+        help='How far off that fraction it tolerates.'),
+    centre_deadband=Spec(
+        CENTRE_DEADBAND, unit='', bounds=(0.0, 0.5),
+        help='How far off centre the target may drift before it turns.'),
+    ahead_deadband=Spec(
+        AHEAD_DEADBAND, unit='', bounds=(0.0, 1.0),
+        help='How far off centre still counts as straight ahead.'),
+    max_forward=Spec(
+        MAX_FORWARD, unit='', bounds=(0.0, 1.0),
+        help='Fastest it will chase.'),
+    max_turn=Spec(
+        MAX_TURN, unit='', bounds=(0.0, 1.0),
+        help='Hardest it will turn while chasing.'),
+    max_strafe=Spec(
+        MAX_STRAFE, unit='', bounds=(0.0, 1.0),
+        help='Hardest it will slide sideways while chasing.'),
+    lost_patience=Spec(
+        LOST_PATIENCE, unit='frames', bounds=(1.0, 200.0),
+        help='Frames without the target before it gives up.'),
+)
+
 class FollowBehavior(Behavior):
     name = "follow"
     label = "Follow object"
@@ -72,12 +110,12 @@ class FollowBehavior(Behavior):
     def __init__(self, target="person"):
         self.target = target
         self.orbit = 0.0            # -1 .. 1, sideways circling (mecanum only)
-        self.standoff_cm = STANDOFF_CM
+        self.standoff_cm = CHASE.standoff_cm
         self.turn_pid = PID(kp=1.6, kd=0.3, setpoint=0.0)
         #: Gain is per centimetre: 35cm too far asks for 0.7, which the clamp
-        #: below brings to MAX_FORWARD.
-        self.distance_pid = PID(kp=0.02, kd=0.005, setpoint=STANDOFF_CM)
-        self.forward_pid = PID(kp=2.0, kd=0.2, setpoint=TARGET_FILL)
+        #: below brings to CHASE.max_forward.
+        self.distance_pid = PID(kp=0.02, kd=0.005, setpoint=CHASE.standoff_cm)
+        self.forward_pid = PID(kp=2.0, kd=0.2, setpoint=CHASE.target_fill)
         self.lost_frames = 0
         self.box = None
         self.state = "waiting"
@@ -122,7 +160,7 @@ class FollowBehavior(Behavior):
         target = world.largest(self.target)
         if target is None:
             self.lost_frames += 1
-            if self.lost_frames > LOST_PATIENCE:
+            if self.lost_frames > CHASE.lost_patience:
                 self.box = None
                 self.state = f"no {self.target} in view"
             else:
@@ -137,15 +175,15 @@ class FollowBehavior(Behavior):
         # -- turn: drive the horizontal offset to zero ----------------------
         offset = (target.centre_x - width / 2) / (width / 2)
         omega = 0.0
-        if abs(offset) > CENTRE_DEADBAND:
+        if abs(offset) > CHASE.centre_deadband:
             # PID error is (setpoint - measured) = -offset, so a target to the
             # right gives a negative output; flip it back to "turn right".
             omega = -self.turn_pid.update(offset, world.dt)
-            omega = max(-MAX_TURN, min(MAX_TURN, omega))
+            omega = max(-CHASE.max_turn, min(CHASE.max_turn, omega))
 
         # -- drive: hold a real distance, and fall back to apparent size ----
         fill = target.height / height
-        ahead = abs(offset) < AHEAD_DEADBAND
+        ahead = abs(offset) < CHASE.ahead_deadband
         measured = (
             world.range_cm
             if (world.range_cm is not None and world.range_cm > 0
@@ -158,7 +196,7 @@ class FollowBehavior(Behavior):
             # PID error is (setpoint - measured), which goes negative when the
             # target is further away than wanted -- and further away is exactly
             # when to drive forward. Flip it, as the turn above does.
-            if abs(measured - self.standoff_cm) > DISTANCE_DEADBAND_CM:
+            if abs(measured - self.standoff_cm) > CHASE.distance_deadband_cm:
                 vx = -self.distance_pid.update(measured, world.dt)
             how = f"{measured:.0f}cm"
         elif not ahead:
@@ -169,12 +207,12 @@ class FollowBehavior(Behavior):
             how = "turning to face"
         else:
             # No echo. The camera's estimate is worse, and worse is not nothing.
-            if abs(TARGET_FILL - fill) > FILL_DEADBAND:
+            if abs(CHASE.target_fill - fill) > CHASE.fill_deadband:
                 vx = self.forward_pid.update(fill, world.dt)
             how = f"fill {fill:.2f} (no echo)"
 
-        vx = max(-MAX_FORWARD, min(MAX_FORWARD, vx))
-        vy = self.orbit * MAX_STRAFE
+        vx = max(-CHASE.max_forward, min(CHASE.max_forward, vx))
+        vy = self.orbit * CHASE.max_strafe
 
         self.state = (
             f"{self.target} {target.confidence:.2f} | off {offset:+.2f} | {how}"

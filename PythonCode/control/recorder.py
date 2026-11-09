@@ -13,7 +13,6 @@ routine, not for getting back to an exact spot.
 """
 
 import threading
-import time
 from dataclasses import dataclass
 
 from hal import Velocity
