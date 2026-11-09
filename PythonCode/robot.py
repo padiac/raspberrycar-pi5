@@ -24,6 +24,7 @@ from calibration import Calibration
 from preferences import Preferences
 from diagnostics.logbook import book
 from control import PathRecorder, SafetyLayer
+from control.turning import TurnTracker
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.camera import Camera
@@ -197,6 +198,9 @@ class Robot:
         self.allowed = Velocity.STOP
         self.behavior_error = None
         self.world = WorldState()
+        #: Undoes the wrap in the reported heading, so a behaviour can ask
+        #: how far the car has turned and whether it is turning at all.
+        self.turning = TurnTracker()
 
         #: Who has the page open, by address, with when they were last seen.
         #:
@@ -744,6 +748,10 @@ class Robot:
             if floor_cm is not None and range_cm <= floor_cm + self.BLIND_MARGIN_CM:
                 blind = True
 
+        self.turning.update(
+            self.link.telemetry.heading if self.link else None,
+            time.monotonic())
+
         looking_forward = self.pan.looking_forward if self.pan else True
         if looking_forward and range_cm is not None:
             self._forward_cm = range_cm
@@ -766,6 +774,8 @@ class Robot:
             # The one obstacle reading that is never a false positive about
             # whether something is there: the car is touching it.
             bumped=bool(self.link.telemetry.bumped) if self.link else False,
+            turned=self.turning.turned,
+            turn_rate=self.turning.rate,
         )
 
     #: A client that has not asked for telemetry in this long has closed the
@@ -823,6 +833,7 @@ class Robot:
             "ir_r": "" if tel is None or tel.proximity is None else int(tel.proximity[1]),
             "heading": "" if tel is None or tel.heading is None else round(tel.heading, 1),
             "bump": "" if tel is None else int(tel.bumped),
+            "turn_rate": "" if self.turning.rate is None else round(self.turning.rate, 1),
             "reboots": self.link.board_reboots if self.link else "",
             "limit": round(self.speed_limit, 2),
             # Semicolons, because this is going into a comma-separated file
@@ -940,7 +951,8 @@ class Robot:
             # so wiring can be checked by waving a hand at them.
             "imu": (
                 {"heading": self.link.telemetry.heading,
-                 "bumped": self.link.telemetry.bumped}
+                 "bumped": self.link.telemetry.bumped,
+                 **self.turning.status()}
                 if self.link else None
             ),
             "ir": (

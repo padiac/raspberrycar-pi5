@@ -22,6 +22,7 @@ head has to be pointing at each question in turn.
 import random
 import time
 
+from control import vfh
 from hal import Velocity
 
 from .base import Behavior
@@ -35,7 +36,14 @@ STUCK_AFTER = 0.25
 #: about. Straight ahead is included even though that is the direction already
 #: known to be blocked: it says by how much, which is what tells a doorway
 #: apart from a wall.
-SCAN_ANGLES = (-90.0, -45.0, 0.0, 45.0, 90.0)
+#
+# Thirty degrees apart rather than forty-five. The chooser grows every
+# obstacle by the width of the car and then looks for gaps, and a gap can
+# only be found between two samples that bracket it -- at forty-five degrees
+# a doorway at sixty centimetres falls entirely between two readings. Thirty
+# is about twice the beam width, which is as fine as the sensor can honestly
+# support, and costs one more dwell than before.
+SCAN_ANGLES = (-90.0, -60.0, -30.0, 0.0, 30.0, 60.0, 90.0)
 #: Time to hold each angle. The servo has to arrive and the ultrasonic needs a
 #: ping or two from the new direction; a reading taken mid-swing describes
 #: somewhere the head no longer is.
@@ -211,6 +219,29 @@ IR_ASSUMED_CM = 8.0
 REVERSE_SPEED = 0.5
 REVERSE_HOLD = 0.7
 
+#: Commanded to turn, and not turning. See control/turning.py for why this is
+#: worth knowing and why nothing else in the car can tell.
+#:
+#: The rate has to be below this for the manoeuvre to count as stalled. Not
+#: zero: the gyroscope has noise, the car rocks on its suspension, and a
+#: figure a hair above zero would make every turn look fine. A real turn at
+#: this car's turning speed is well over a hundred degrees a second, so there
+#: is a wide gap to sit in.
+STALL_RATE = 12.0
+#: And it has to have been that way this long. A turn takes a moment to break
+#: static friction, and declaring the first tenth of every turn a stall would
+#: be worse than not looking.
+STALL_AFTER = 0.7
+
+#: Turns are held until the car has actually turned this far, rather than for
+#: a fixed time, whenever the IMU is answering. The timed hold stays as the
+#: fallback and as the deadline -- a turn that has not finished in twice the
+#: time it should have is not going to.
+TURN_TIMEOUT_FACTOR = 2.5
+#: Degrees per second the hold times were written around, used to convert an
+#: old hold into the angle it was meant to produce.
+ASSUMED_TURN_RATE = 95.0
+
 
 class PatrolBehavior(Behavior):
     name = "patrol"
@@ -233,6 +264,26 @@ class PatrolBehavior(Behavior):
         self.glance_next = 0.0      # when to look away again
         self.glance_side = 1.0      # alternates, so both sides get looked at
         self.sides = {}             # side -> (cm, when it was measured)
+        #: Every angle this car has looked at lately, with when. A sweep is
+        #: five seconds of looking in different directions from a car that is
+        #: not quite where it was, so the chooser is given the glances taken
+        #: while cruising as well -- that is the nearest thing to the single
+        #: instantaneous scan the algorithm was written for.
+        self.seen = {}              # angle -> (cm, when, was_it_silence)
+        #: The direction chosen last time, so the chooser can prefer it. Two
+        #: ways out that score within noise of each other used to be settled
+        #: by a coin toss on every decision, which is a car twitching between
+        #: them rather than taking either.
+        self.last_choice = None
+        #: (turned-at-the-start, degrees wanted) while a closed-loop turn is
+        #: running, or None when the current manoeuvre is timed.
+        self.turn_goal = None
+        #: When the current manoeuvre started, for the stall check.
+        self.move_since = 0.0
+        self.stalls = 0
+        #: The most recent world, so the parts of the sweep that run two
+        #: calls deep can reach it. See _decide.
+        self.world_now = None
         self.state = "idle"
 
     def start(self, robot):
@@ -261,14 +312,22 @@ class PatrolBehavior(Behavior):
 
     def update(self, robot, world):
         now = time.monotonic()
+        self.world_now = world
         self._note_infrared(world, now)
 
         if self.scan is not None:
             return self._sweep(robot, world, now)
 
-        # Mid-manoeuvre from an earlier tick: see it through.
+        # Mid-manoeuvre from an earlier tick: see it through -- unless it is
+        # already done, or is visibly not happening.
         if now < self.until:
-            return self.move
+            done, why = self._manoeuvre_over(world, now)
+            if not done:
+                return self.move
+            self.until = 0.0
+            self.turn_goal = None
+            if why:
+                self.state = why
 
         # Some manoeuvres come in two parts -- back out of the corner, then
         # turn round -- and the second must not be interrupted by the first
@@ -300,7 +359,8 @@ class PatrolBehavior(Behavior):
                     robot, now,
                     Velocity(omega=random.choice((-1.0, 1.0))
                              * self._enough(robot, TURN_SPEED)),
-                    held, "cornered -- turning away")
+                    held, "cornered -- turning away", world=world,
+                    degrees=held * ASSUMED_TURN_RATE)
 
         # Ask the safety layer what happened to our last request rather than
         # reading the sensors again here -- it already decided, and duplicating
@@ -317,6 +377,41 @@ class PatrolBehavior(Behavior):
             self.blocked_since = None
 
         return self._cruise(robot, world, now)
+
+    def _manoeuvre_over(self, world, now):
+        """Should the committed manoeuvre stop before its time is up?
+
+        Two reasons, and they are the two things the IMU is actually good
+        for. Either the turn has gone as far as it was asked to -- which a
+        clock cannot know, because how fast this car turns depends on the
+        speed limit, the battery and the carpet -- or it is not turning at
+        all, which is a wheel on a cable, a castor against a chair leg, or a
+        commanded duty below what moves this car. All of those look identical
+        from inside the control loop, where the wheels are being told what to
+        do and everything downstream is content.
+
+        Returns (stop, note). A note of None means stop quietly.
+        """
+        if self.turn_goal is not None and world.turn_rate is not None:
+            mark, wanted = self.turn_goal
+            so_far = world.turned - mark
+            if abs(so_far) >= abs(wanted):
+                return True, None       # the angle was reached; say nothing
+
+        if (abs(self.move.omega) > 1e-6 and world.turn_rate is not None
+                and now - self.move_since > STALL_AFTER
+                and abs(world.turn_rate) < STALL_RATE):
+            # Commanded to turn and not turning. Treated as a block so that
+            # it feeds the same escalation as everything else: three of these
+            # inside the window and the car stops trying to turn its way out
+            # and reverses instead.
+            self.stalls += 1
+            self.blocks.append(now)
+            self.blocks = [b for b in self.blocks if now - b < TRAPPED_WINDOW_S]
+            return True, ("commanded %.2f and turning %.0f deg/s -- stalled "
+                          "(%d so far)" % (self.move.omega, world.turn_rate,
+                                           self.stalls))
+        return False, None
 
     # -- driving along, looking around -------------------------------------
 
@@ -537,6 +632,7 @@ class PatrolBehavior(Behavior):
         else:
             self.clearance[angle] = min(reading, CLEAR_CM)
             self.unknown.discard(angle)
+        self._remember(angle, self.clearance[angle], now, angle in self.unknown)
 
         if index + 1 < len(SCAN_ANGLES):
             self.scan = (index + 1, now + SCAN_DWELL)
@@ -550,6 +646,10 @@ class PatrolBehavior(Behavior):
 
     def _decide(self, robot, now):
         """Choose a way out of wherever the sweep just found the car."""
+        # Kept from the last tick by update(), because the sweep machinery
+        # reaches here through two layers that never needed a world before
+        # and threading one through all of them to reach one call is worse
+        # than remembering it.
         profile = " ".join(
             "%+d:%s" % (int(a), "?" if a in self.unknown else "%.0f" % self.clearance[a])
             for a in sorted(self.clearance))
@@ -593,46 +693,88 @@ class PatrolBehavior(Behavior):
         # the car is wider than the beam -- picking the deepest reading rather
         # than the widest opening is how it kept aiming at slots it could not
         # fit through.
-        angles = sorted(self.clearance)
-        clearance = self._resolve_unknowns()
-        scores = {}
-        for index, angle in enumerate(angles):
-            if angle == 0.0:
-                continue
-            if self.avoid and angle == self.avoid[0] and now < self.avoid[1]:
-                continue        # this way out was tried and did not work
-            around = [clearance[angles[j]]
-                      for j in (index - 1, index, index + 1)
-                      if 0 <= j < len(angles)]
-            scores[angle] = min(around)
+        samples = self._samples(now)
+        forbid = ()
+        if self.avoid and now < self.avoid[1]:
+            # A way out that was tried and led straight back. Rule out the
+            # whole arc the car would be aimed into, not the one exact angle
+            # -- at five-degree resolution "the same direction" is a span.
+            forbid = tuple(a for a in vfh.fine_angles((-90.0, 90.0))
+                           if abs(a - self.avoid[0]) <= 20.0)
 
-        if not scores:
+        best, trace = vfh.choose(
+            samples, self._radius(robot), previous=self.last_choice,
+            forbid=forbid)
+
+        if best is None:
+            # Every direction is inside something once the car is grown to
+            # its own width. Backing out is the only move left that does not
+            # involve swinging a corner through an obstacle.
+            self.last_choice = None
             return self._commit(
-                robot, now,
-                Velocity(omega=self._guess(robot) * self._enough(robot, TURN_SPEED)),
-                TURN_HOLD_MIN, f"nowhere left to try | {profile}",
+                robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
+                f"no gap wide enough -- {trace} | {profile}",
             )
 
-        best_score = max(scores.values())
-        # A tie is real -- a corridor looks the same both ways -- so break it
-        # randomly rather than always choosing the same side of it.
-        rivals = [a for a, s in scores.items() if s > best_score - 5.0]
-        best = random.choice(rivals)
-        room = clearance[best]
-
+        self.last_choice = best
         # Remember it, so if this fails the next decision does not repeat it.
         self.avoid = (best, now + TRAPPED_WINDOW_S)
 
+        if abs(best) < 1e-6:
+            # The chooser can pick straight ahead when the thing that blocked
+            # the car has gone -- somebody stepped out of the way, or the
+            # reading was a one-off. Driving is then the right answer and
+            # turning zero degrees for a second is not.
+            self.blocked_since = None
+            return self._commit(
+                robot, now, Velocity(vx=CRUISE), TURN_HOLD_MIN,
+                f"clear ahead after all -- {trace} | {profile}",
+            )
+
         direction = 1.0 if best > 0 else -1.0
         hold = TURN_HOLD_MIN + (TURN_HOLD_MAX - TURN_HOLD_MIN) * (abs(best) / 90.0)
-        measured = "?" if best in self.unknown else "%.0fcm" % room
+        # The angle is the whole point of choosing one: turn to it, rather
+        # than turning for however long that angle used to take.
         return self._commit(
             robot, now,
             Velocity(omega=direction * self._enough(robot, TURN_SPEED)), hold,
-            f"most room {self._name(best)} ({measured}) | {profile}",
+            f"going {self._name(best)} -- {trace} | {profile}",
+            world=self.world_now, degrees=best,
         )
 
-    def _commit(self, robot, now, velocity, seconds, state, follow=None):
+    # -- what the chooser is given ----------------------------------------
+
+    def _radius(self, robot):
+        """Half the car plus a margin: what every obstacle is grown by."""
+        if robot.calibration is None:
+            return 15.0
+        width = robot.calibration.get("car_width_cm") or 22.0
+        margin = robot.calibration.get("car_margin_cm") or 0.0
+        return width / 2.0 + margin
+
+    def _remember(self, angle, centimetres, when, silent):
+        self.seen[angle] = (centimetres, when, silent)
+
+    def _samples(self, now):
+        """Every direction worth telling the chooser about.
+
+        This sweep first, then anything glanced at recently that the sweep
+        did not cover. Old readings are dropped rather than aged gracefully:
+        a measurement taken while the car was somewhere else is not a worse
+        measurement of here, it is a measurement of somewhere else.
+        """
+        resolved = self._resolve_unknowns()
+        samples = dict(resolved)
+        for angle, (centimetres, when, silent) in self.seen.items():
+            if angle in samples:
+                continue
+            if now - when > SIDE_MEMORY_S:
+                continue
+            samples[angle] = OPEN_UNKNOWN_CM if silent else centimetres
+        return samples
+
+    def _commit(self, robot, now, velocity, seconds, state, follow=None,
+                world=None, degrees=None):
         """Hold a manoeuvre for a while, so the car clears what stopped it
         instead of twitching on the spot as the reading flickers.
 
@@ -647,6 +789,16 @@ class PatrolBehavior(Behavior):
         wrong except the arithmetic.
         """
         self.move = velocity
+        self.move_since = now
+        self.turn_goal = None
+        if degrees is not None and world is not None and world.turn_rate is not None:
+            # Closed loop: hold until the car has turned this far, with the
+            # clock kept on as a deadline. A turn that has not finished in
+            # well over the time it should have taken is not going to, and
+            # hanging on a goal that will never arrive is worse than a turn
+            # of the wrong size.
+            self.turn_goal = (world.turned, degrees)
+            seconds = seconds * TURN_TIMEOUT_FACTOR
         self.until = now + seconds
         self.follow = follow
         floor = robot.calibration.get("turn_floor") if robot.calibration else 0.0

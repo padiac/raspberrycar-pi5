@@ -35,6 +35,16 @@ DEFAULTS = {
     #: of this car are in the sensor's way, which depends entirely on where
     #: the wiring was routed and changes whenever that does.
     "pan_blind": {},
+    #: How wide the chassis is, in centimetres, across the widest part --
+    #: which on this car is the mecanum wheels, not the plate they are bolted
+    #: to. A measurement, and the one the direction chooser turns on: every
+    #: obstacle is grown by half of this plus a margin, and a gap that
+    #: survives is one the car fits through. Guessed from the half-diagonal
+    #: used for the turning check until somebody puts a ruler across it.
+    "car_width_cm": 22.0,
+    #: Extra room to leave either side, on top of the half width. The car
+    #: does not drive where it is pointed to the centimetre.
+    "car_margin_cm": 4.0,
     #: Duty cycle below which a commanded turn does not turn the car.
     #: Rotating in place fights the rollers on all four mecanum wheels,
     #: so it costs more than driving straight and has its own floor.

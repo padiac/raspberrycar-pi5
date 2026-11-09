@@ -66,6 +66,16 @@ class WorldState:
                                         # room beyond it
     proximity: Proximity = None         # side infrared
     floor: Floor = None                 # downward line sensors
+    turned: float = 0.0                 # cumulative rotation in degrees,
+                                        # unwrapped, signed, positive right
+    turn_rate: float = None             # degrees per second right now, or
+                                        # None when the IMU is not answering
+                                        # -- which is NOT the same as zero
+    turned: float = 0.0                 # cumulative rotation in degrees,
+                                        # unwrapped, signed, positive right
+    turn_rate: float = None             # degrees per second right now, or
+                                        # None when the IMU is not answering
+                                        # -- which is NOT the same as zero
     bumped: bool = False                # the accelerometer felt a jolt
                                         # recently; the firmware holds it
                                         # long enough to survive a 20Hz poll
