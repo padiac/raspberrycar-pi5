@@ -42,6 +42,11 @@ DEFAULTS = {
     #: survives is one the car fits through. Guessed from the half-diagonal
     #: used for the turning check until somebody puts a ruler across it.
     "car_width_cm": 22.0,
+    #: And how long, front to back, over the widest parts. Together with the
+    #: width this gives the radius the corners sweep through when the car
+    #: turns on the spot, which is the one number the rotation check needs
+    #: and which used to be a guess.
+    "car_length_cm": 28.0,
     #: Extra room to leave either side, on top of the half width. The car
     #: does not drive where it is pointed to the centimetre.
     "car_margin_cm": 4.0,

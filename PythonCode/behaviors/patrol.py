@@ -19,6 +19,7 @@ further for an angle further round. That is the whole reason for the pause: the
 head has to be pointing at each question in turn.
 """
 
+import math
 import random
 import time
 
@@ -108,6 +109,11 @@ NO_PROGRESS_CM = 6.0
 #: Roughly the half-diagonal of the chassis. Anything closer than this in any
 #: swept direction means backing off first, which costs a second and is the
 #: difference between turning and grinding.
+#
+# Derived now, not guessed. Measured on this car at 15 by 28 centimetres,
+# the half-diagonal is 15.9 -- which is what the guess happened to be, so
+# nothing about the car changes today. What changes is that the number
+# follows the chassis instead of being a comment claiming it does.
 TURN_CLEARANCE_CM = 16.0
 #: How long to back off for when there is not enough.
 MAKE_ROOM_S = 0.8
@@ -671,7 +677,7 @@ class PatrolBehavior(Behavior):
         # sweep has just measured every direction the corners are about to
         # swing through, which is the one moment this is knowable.
         tightest = min(self.clearance.values(), default=999.0)
-        if tightest < TURN_CLEARANCE_CM:
+        if tightest < self._turn_clearance(robot):
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), MAKE_ROOM_S,
                 f"only {tightest:.0f}cm to turn in, backing off first | {profile}",
@@ -743,6 +749,24 @@ class PatrolBehavior(Behavior):
         )
 
     # -- what the chooser is given ----------------------------------------
+
+    def _turn_clearance(self, robot):
+        """Radius the corners sweep through when turning on the spot.
+
+        Half the diagonal of the chassis, which is where the furthest corner
+        is from the centre of rotation, and therefore exactly how much room
+        a rotation needs in every direction it has measured. No margin on
+        top: unlike driving at a gap, this is checked against a sweep taken
+        a moment ago from this spot, so the measurement and the manoeuvre
+        describe the same place.
+        """
+        if robot.calibration is None:
+            return TURN_CLEARANCE_CM
+        width = robot.calibration.get("car_width_cm") or 0.0
+        length = robot.calibration.get("car_length_cm") or 0.0
+        if width <= 0.0 or length <= 0.0:
+            return TURN_CLEARANCE_CM
+        return math.hypot(width / 2.0, length / 2.0)
 
     def _radius(self, robot):
         """Half the car plus a margin: what every obstacle is grown by."""
