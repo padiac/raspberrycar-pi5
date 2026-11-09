@@ -136,6 +136,7 @@ class Robot:
             slow_cm=self.preferences.get("slow_cm"),
             enabled=self.preferences.get("safety_enabled"),
             bump_guard=self.preferences.get("bump_guard"),
+            no_echo_ceiling=self.preferences.get("no_echo_ceiling"),
         )
         self.recorder = PathRecorder()
         # Costs no wiring: the Pi already measures the rail it runs on.
@@ -230,6 +231,8 @@ class Robot:
         if self.detector is not None:
             self.detector.configure(
                 confidence=self.preferences.get("detect_confidence"))
+        if self.vision is not None:
+            self.vision.detect_target_fps = self.preferences.get("detect_fps")
         if self.vision is not None and self.preferences.get("detect_enabled"):
             self.vision.set_detection(True)
             print("[prefs] object detection on, as last set", flush=True)
@@ -623,13 +626,14 @@ class Robot:
         return self.speed_limit
 
     def set_safety(self, enabled=None, stop_cm=None, slow_cm=None,
-                   bump_guard=None):
+                   bump_guard=None, no_echo_ceiling=None):
         """Change the reflex layer and remember it. Returns its status."""
         changes = {}
         if enabled is not None:
             self.safety.enabled = bool(enabled)
             changes["safety_enabled"] = self.safety.enabled
-        for key, raw in (("stop_cm", stop_cm), ("slow_cm", slow_cm)):
+        for key, raw in (("stop_cm", stop_cm), ("slow_cm", slow_cm),
+                         ("no_echo_ceiling", no_echo_ceiling)):
             if raw is None:
                 continue
             value = self.preferences.set(key, raw)

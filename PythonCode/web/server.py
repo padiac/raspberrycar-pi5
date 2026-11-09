@@ -344,6 +344,7 @@ def api_safety():
             stop_cm=data.get("stop_cm"),
             slow_cm=data.get("slow_cm"),
             bump_guard=data.get("bump_guard"),
+            no_echo_ceiling=data.get("no_echo_ceiling"),
         )
     except (TypeError, ValueError) as exc:
         return jsonify(error=str(exc)), 400
@@ -384,10 +385,10 @@ def api_detect():
             robot.preferences.set("detect_confidence",
                                   robot.detector.confidence)
     if "target_fps" in data:
-        try:
-            robot.vision.detect_target_fps = max(0.0, min(60.0, float(data["target_fps"])))
-        except (TypeError, ValueError):
-            return jsonify(error="target_fps must be a number"), 400
+        stored = robot.preferences.set("detect_fps", data["target_fps"])
+        if stored is None:
+            return jsonify(error="target_fps must be a number up to 60"), 400
+        robot.vision.detect_target_fps = stored
 
     return jsonify(
         enabled=robot.vision.detect_enabled,

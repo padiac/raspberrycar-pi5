@@ -99,10 +99,22 @@ class SafetyReport:
 
 class SafetyLayer:
     def __init__(self, stop_cm=STOP_CM, slow_cm=SLOW_CM, enabled=True,
-                 bump_guard="auto"):
+                 bump_guard="auto", no_echo_ceiling=NO_ECHO_CEILING):
         self.stop_cm = stop_cm
         self.slow_cm = slow_cm
         self.enabled = enabled
+        #: Speed allowed when the ping times out. One means no limit, which
+        #: is to say: treat a timeout as open road and drive at it.
+        #:
+        #: That is a choice with a sharp edge and it belongs to whoever is
+        #: driving, not to this file. The argument for the limit is in the
+        #: comment on NO_ECHO_CEILING and has not changed: glass, a wall met
+        #: at an angle and a curtain all return exactly what an empty room
+        #: returns. The argument against is that crossing an actually empty
+        #: room at a crawl makes the car useless, and in a flat the timeout
+        #: is mostly the empty room. With it off, the front corners and the
+        #: bump reflex are what is left.
+        self.no_echo_ceiling = no_echo_ceiling
         #: "off", "auto" or "always". See preferences.py for what they mean;
         #: the short version is that "auto" trusts a human to have noticed
         #: the collision themselves and does not trust a behaviour to.
@@ -129,6 +141,7 @@ class SafetyLayer:
             "slow_cm": self.slow_cm,
             "bump_guard": self.bump_guard,
             "bump_active": self.bump_active,
+            "no_echo_ceiling": self.no_echo_ceiling,
             **self.last.as_dict(),
         }
 
@@ -180,9 +193,9 @@ class SafetyLayer:
         elif vx > 0 and forward_reading and distance < 0:
             # Heard nothing back. Could be an empty room; could equally be
             # glass, or a wall at a glancing angle, or something soft.
-            if vx > NO_ECHO_CEILING:
+            if vx > self.no_echo_ceiling:
                 reasons.append("nothing came back, creeping")
-                vx = NO_ECHO_CEILING
+                vx = self.no_echo_ceiling
         elif vx > 0 and forward_reading and distance > 0:
             if distance < self.stop_cm:
                 reasons.append(f"obstacle {distance:.0f}cm ahead, forward blocked")

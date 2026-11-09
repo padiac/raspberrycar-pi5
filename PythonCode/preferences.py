@@ -45,6 +45,11 @@ DEFAULTS = {
     #: off is a decision a human makes knowingly, and having it come back on
     #: after a restart while somebody is mid-experiment is its own hazard.
     "safety_enabled": True,
+    #: Speed allowed when the ultrasonic hears nothing back. One means no
+    #: limit: a timeout is taken as open road. The default keeps the car at
+    #: a crawl, because a pane of glass returns a timeout and so does a
+    #: curtain -- see the comment in control/safety.py.
+    "no_echo_ceiling": 0.22,
     #: What a jolt from the accelerometer is allowed to do.
     #:
     #: "off"    -- nothing, it is only ever displayed
@@ -56,6 +61,16 @@ DEFAULTS = {
     #: Object detection, and the confidence below which a box is ignored.
     "detect_enabled": False,
     "detect_confidence": 0.4,
+    #: How often the detector is allowed to look, in frames per second.
+    #:
+    #: Not free and not about smoothness: the preview is a separate 30fps
+    #: stream and stays that way whatever this is. What this buys is how far
+    #: the car travels between looks, and what it costs is CPU taken from
+    #: the same four cores that encode the video. Measured on this Pi 5:
+    #: 10fps leaves the machine at about a quarter loaded, 24fps at roughly
+    #: three quarters, with the preview dipping while it ramps and settling
+    #: back near 30. No thermal throttling at either.
+    "detect_fps": 10.0,
     #: Whether the flight recorder starts with the car.
     "flight_recorder": False,
 }
@@ -68,6 +83,8 @@ BOUNDS = {
     "stop_cm": (0.0, 200.0),
     "slow_cm": (0.0, 400.0),
     "detect_confidence": (0.05, 0.95),
+    "detect_fps": (0.0, 60.0),
+    "no_echo_ceiling": (0.0, 1.0),
 }
 
 CHOICES = {

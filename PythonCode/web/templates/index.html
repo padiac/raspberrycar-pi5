@@ -611,6 +611,11 @@
     <input type="range" id="slowcm" min="10" max="200" value="40" step="5">
   </div>
   <div class="row">
+    <label>no echo</label>
+    <button class="toggle" id="noecho">--</button>
+    <span class="val" id="noechoval" style="color:var(--muted);font-weight:500"></span>
+  </div>
+  <div class="row">
     <label>on contact</label>
     <button class="toggle" id="bumpguard">--</button>
     <span class="val" id="bumpstate" style="color:var(--muted);font-weight:500"></span>
@@ -619,7 +624,10 @@
     to turn when the car feels over-protective -- the second one is. Between
     the two the car is throttled in proportion to the room left, which at
     200cm means it is throttled all the time in an apartment and holding the
-    trigger down does nothing. On contact: a jolt the accelerometer felt
+    trigger down does nothing. No echo: the ping timing out means either an empty room or a pane
+    of glass, a wall met at an angle or a curtain, which all return exactly
+    what an empty room returns -- so creeping is the careful reading of it and
+    full speed is the useful one. On contact: a jolt the accelerometer felt
     blocks forward travel for about a second. <em>auto</em> does that only
     while a behaviour is driving, on the grounds that a person felt the same
     collision themselves and does not need their controls frozen.</p>
@@ -749,7 +757,7 @@ const pulse = $('pulse'), speed = $('speed');
 let vx = 0, vy = 0, om = 0, lastMoving = false;
 let activeBehavior = null, padActive = false;
 let cameraOn = true, detectOn = false, safetyOn = true, dof = 2;
-let bumpGuard = 'auto', flightOn = false;
+let bumpGuard = 'auto', flightOn = false, noEcho = 0.22;
 const GUARDS = ['off', 'auto', 'always'];
 let detections = [], currentTarget = null;
 
@@ -969,6 +977,10 @@ $('stopcm').oninput = () => { $('stopval').textContent = $('stopcm').value + 'cm
 $('slowcm').oninput = () => { $('slowval').textContent = $('slowcm').value + 'cm'; };
 $('stopcm').onchange = () => post('/api/safety', {stop_cm: +$('stopcm').value});
 $('slowcm').onchange = () => post('/api/safety', {slow_cm: +$('slowcm').value});
+$('noecho').onclick = async () => {
+  const r = await post('/api/safety', {no_echo_ceiling: noEcho < 1.0 ? 1.0 : 0.22});
+  if (r && r.no_echo_ceiling !== undefined) noEcho = r.no_echo_ceiling;
+};
 $('bumpguard').onclick = async () => {
   const next = GUARDS[(GUARDS.indexOf(bumpGuard) + 1) % GUARDS.length];
   const r = await post('/api/safety', {bump_guard: next});
@@ -1367,6 +1379,16 @@ async function telemetry() {
       $('bumpguard').classList.toggle('on', bumpGuard !== 'off');
     }
     $('bumpstate').textContent = sf.bump_active ? 'holding after a knock' : '';
+
+    if (sf.no_echo_ceiling !== undefined) {
+      noEcho = sf.no_echo_ceiling;
+      const crawling = noEcho < 1.0;
+      $('noecho').textContent = crawling ? 'creep' : 'full speed';
+      $('noecho').classList.toggle('on', crawling);
+      $('noechoval').textContent = crawling
+        ? 'capped at ' + Math.round(noEcho * 100) + '% when the ping times out'
+        : 'a timed-out ping counts as open road';
+    }
 
     const peers = d.peers || [];
     const pc = $('peerchip');
