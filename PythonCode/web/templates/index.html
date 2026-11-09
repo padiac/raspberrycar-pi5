@@ -716,6 +716,22 @@
 </div>
 
 <div class="panel">
+  <h2>Settings <em id="setcount"></em></h2>
+  <details id="setbox">
+    <summary style="cursor:pointer;color:var(--muted);margin:8px 0">every tunable on the car</summary>
+    <div id="settings"></div>
+  </details>
+  <p class="hint">One register for every number somebody might want to
+    change. The values live beside the code that explains them -- moving
+    them into a file of their own would leave the explanations orphaned --
+    and what is collected here is the declaration: what each one means,
+    what it is in, and what range is sane. Anything outside that range is
+    refused rather than quietly clamped. Measurements of this particular
+    machine are not here; they are facts rather than choices and live in
+    the calibration.</p>
+</div>
+
+<div class="panel">
   <h2>Logs <em id="logfree"></em></h2>
   <div class="row">
     <button class="toggle" id="flight">flight recorder</button>
@@ -1025,6 +1041,92 @@ async function pollLog() {
 }
 setInterval(pollLog, 4000);
 pollLog();
+
+// -- the settings register ------------------------------------------------
+let settingsDrawn = false;
+
+function settingRow(entry) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.style.alignItems = 'flex-start';
+
+  const label = document.createElement('label');
+  label.style.minWidth = '150px';
+  label.textContent = entry.name.split('.').slice(1).join('.');
+  label.title = entry.name;
+  row.appendChild(label);
+
+  let input;
+  if (entry.choices) {
+    input = document.createElement('select');
+    for (const choice of entry.choices) {
+      const option = document.createElement('option');
+      option.value = option.textContent = choice;
+      input.appendChild(option);
+    }
+    input.value = entry.value;
+  } else if (entry.type === 'bool') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = !!entry.value;
+  } else {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.step = 'any';
+    input.value = entry.value;
+    if (entry.bounds) { input.min = entry.bounds[0]; input.max = entry.bounds[1]; }
+    input.style.maxWidth = '110px';
+  }
+  input.style.marginRight = '8px';
+
+  const note = document.createElement('span');
+  note.className = 'val';
+  note.style.cssText = 'color:var(--muted);font-weight:500;flex:1;min-width:0';
+  const range = entry.bounds ? ' (' + entry.bounds[0] + '..' + entry.bounds[1] + ')' : '';
+  note.textContent = (entry.unit ? entry.unit + '  ' : '') + entry.help + range;
+
+  input.onchange = async () => {
+    const value = entry.type === 'bool' ? input.checked
+      : (entry.choices ? input.value : +input.value);
+    const reply = await post('/api/settings', {[entry.name]: value});
+    if (reply && reply.refused && reply.refused.length) {
+      note.textContent = 'refused: outside ' + JSON.stringify(entry.bounds);
+      note.style.color = 'var(--bad)';
+    } else {
+      note.style.color = 'var(--muted)';
+      loadSettings();
+    }
+  };
+
+  row.appendChild(input);
+  row.appendChild(note);
+  return row;
+}
+
+async function loadSettings() {
+  let data;
+  try {
+    const reply = await fetch('/api/settings');
+    data = await reply.json();
+  } catch (e) { return; }
+  const changed = Object.keys(data.changed || {}).length;
+  $('setcount').textContent = changed
+    ? changed + ' changed from the defaults' : 'all at their defaults';
+  if (settingsDrawn) return;          // redrawing steals focus mid-edit
+  const host = $('settings');
+  host.innerHTML = '';
+  for (const group of Object.keys(data.groups).sort()) {
+    const title = document.createElement('h2');
+    title.textContent = group;
+    title.style.cssText = 'font-size:12px;margin:14px 0 4px;color:var(--muted)';
+    host.appendChild(title);
+    for (const entry of data.groups[group]) host.appendChild(settingRow(entry));
+  }
+  settingsDrawn = true;
+}
+
+$('setbox').addEventListener('toggle', () => { if ($('setbox').open) loadSettings(); });
+loadSettings();
 
 $('conf').oninput = () => $('confval').textContent = ($('conf').value / 100).toFixed(2);
 $('conf').onchange = () => post('/api/detect', {conf: $('conf').value / 100});

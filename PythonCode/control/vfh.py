@@ -44,6 +44,8 @@ more precise than the input deserves.
 
 import math
 
+from settings import Spec, group
+
 #: Angular resolution of the working histogram, in degrees.
 #:
 #: Finer than the sweep samples on purpose. The samples are coarse because the
@@ -78,10 +80,30 @@ CONCERN_CM = 100.0
 #:
 #: VFH+ asks that mu_room > mu_ahead + mu_keep, so no amount of agreement
 #: between the two tie-breakers can outvote the actual obstacle data.
-MU_ROOM = 5.0
-MU_AHEAD = 2.0
-MU_KEEP = 2.0
-assert MU_ROOM > MU_AHEAD + MU_KEEP
+CHOICE = group(
+    "vfh",
+    reach_cm=Spec(
+        REACH_CM, unit="cm", bounds=(50.0, 1000.0),
+        help="Past this a reading counts as as-far-as-matters. The "
+             "rangefinder's own range."),
+    concern_cm=Spec(
+        CONCERN_CM, unit="cm", bounds=(20.0, 400.0),
+        help="How far ahead a direction is judged over. Something three "
+             "metres away does not stop the car turning towards it."),
+    mu_room=Spec(
+        5.0, bounds=(0.0, 20.0),
+        help="How much the clearance in a direction matters. Must exceed "
+             "the other two together, or obstacles stop outvoting taste."),
+    mu_ahead=Spec(
+        2.0, bounds=(0.0, 20.0),
+        help="Preference for not turning further than necessary."),
+    mu_keep=Spec(
+        2.0, bounds=(0.0, 20.0),
+        help="Preference for the direction chosen last time. This is the "
+             "hysteresis: without it two equally good ways out are settled "
+             "by a coin toss on every tick, which is a twitch, not a "
+             "decision."),
+)
 
 
 def fine_angles(span):
@@ -107,8 +129,8 @@ def blocked_arc(distance_cm, radius_cm):
     return math.degrees(math.asin(ratio))
 
 
-def histogram(samples, radius_cm, span=(-90.0, 90.0), reach=REACH_CM,
-              concern=CONCERN_CM):
+def histogram(samples, radius_cm, span=(-90.0, 90.0), reach=None,
+              concern=None):
     """Build the polar histogram from measured directions.
 
     `samples` maps angle in degrees (positive to the right, matching the pan
@@ -117,6 +139,8 @@ def histogram(samples, radius_cm, span=(-90.0, 90.0), reach=REACH_CM,
     angle, which is the honest reading of a sweep that measured five
     directions and is being asked about thirty-seven.
     """
+    reach = CHOICE.reach_cm if reach is None else reach
+    concern = CHOICE.concern_cm if concern is None else concern
     out = []
     if not samples:
         return out
@@ -155,12 +179,14 @@ def valleys(bins):
 
 
 def choose(samples, radius_cm, previous=None, span=(-90.0, 90.0),
-           reach=REACH_CM, forbid=(), concern=CONCERN_CM):
+           reach=None, forbid=(), concern=None):
     """Pick a direction to turn towards, or None if nothing fits.
 
     Returns (angle, trace) where trace is a short string for the log, because
     a decision nobody can read afterwards is a decision nobody can debug.
     """
+    reach = CHOICE.reach_cm if reach is None else reach
+    concern = CHOICE.concern_cm if concern is None else concern
     bins = histogram(samples, radius_cm, span, reach, concern)
     if not bins:
         return None, "no readings"
@@ -193,10 +219,10 @@ def choose(samples, radius_cm, previous=None, span=(-90.0, 90.0),
             if any(abs(angle - bad) < 1e-6 for bad in forbid):
                 continue
             here = room_at.get(angle, 0.0)
-            cost = (MU_ROOM * (1.0 - min(here, reach) / reach)
-                    + MU_AHEAD * abs(angle) / 180.0
-                    + MU_KEEP * (abs(angle - previous) / 180.0
-                                 if previous is not None else 0.0))
+            cost = (CHOICE.mu_room * (1.0 - min(here, reach) / reach)
+                    + CHOICE.mu_ahead * abs(angle) / 180.0
+                    + CHOICE.mu_keep * (abs(angle - previous) / 180.0
+                                        if previous is not None else 0.0))
             if best is None or cost < best[0]:
                 best = (cost, angle, here, (low, high))
 

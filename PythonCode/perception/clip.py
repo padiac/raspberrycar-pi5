@@ -19,6 +19,8 @@ detector, but it is not free, and it is the reason the clip is smaller than
 the preview rather than the same size.
 """
 
+from settings import Spec, group
+
 import os
 import shutil
 import subprocess
@@ -73,6 +75,20 @@ MIN_FRAMES = 12
 #: How long to give ffmpeg to finish after its input closes. It has to write
 #: the index at the end, and a clip killed before that is unplayable.
 FINALISE_TIMEOUT_S = 8.0
+
+
+SHELF = group(
+    "clips",
+    budget_mb=Spec(
+        CLIP_BUDGET_BYTES / (1024.0 * 1024.0), unit="MB",
+        bounds=(100.0, 100000.0),
+        help="What the recordings may occupy between them, oldest deleted "
+             "first. Capping each clip bounds one recording, not the "
+             "collection."),
+    keep=Spec(
+        float(CLIP_KEEP), bounds=(1.0, 1000.0),
+        help="And how many, so that a hundred tiny clips are bounded too."),
+)
 
 
 def _ffmpeg_available():
@@ -296,7 +312,8 @@ class ClipRecorder:
         clips.sort(key=lambda c: c["name"])          # oldest first
         total = sum(c["bytes"] for c in clips)
         removed = []
-        while clips and (total > CLIP_BUDGET_BYTES or len(clips) > CLIP_KEEP):
+        budget = SHELF.budget_mb * 1024 * 1024
+        while clips and (total > budget or len(clips) > SHELF.keep):
             oldest = clips.pop(0)
             try:
                 os.remove(os.path.join(self.directory, oldest["name"]))
@@ -367,7 +384,7 @@ class ClipRecorder:
             "seconds": seconds,
             "frames": self.frames_written if recording else 0,
             "free_mb": free_mb,
-            "budget_mb": CLIP_BUDGET_BYTES // (1024 * 1024),
+            "budget_mb": round(SHELF.budget_mb),
             "used_mb": round(sum(c["bytes"] for c in self.clips())
                              / (1024 * 1024), 1),
             "error": self.error,

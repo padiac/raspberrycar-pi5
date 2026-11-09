@@ -9,6 +9,8 @@ The same loop also encodes the JPEG the web stream serves, so annotation
 happens once for both the browser and any behaviour overlay.
 """
 
+from settings import Spec, group
+
 import os
 import threading
 import time
@@ -61,6 +63,19 @@ class FrameBuffer:
         with self.condition:
             got = self.condition.wait(timeout=timeout)
             return got, self.jpeg
+
+
+SIGHT = group(
+    "vision",
+    detect_enabled=Spec(
+        False, help="Whether object detection runs at all."),
+    detect_fps=Spec(
+        10.0, unit="fps", bounds=(0.0, 60.0),
+        help="How often the detector is allowed to look. Not about "
+             "smoothness -- the preview is a separate 30fps stream -- but "
+             "about how far the car travels between looks, paid for in CPU "
+             "taken from the cores that encode the video."),
+)
 
 
 class VisionPipeline:

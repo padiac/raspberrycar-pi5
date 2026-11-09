@@ -50,6 +50,8 @@ import sys
 import threading
 import time
 
+from settings import Spec, group
+
 #: Where the logs go: a sibling of PythonCode, not inside it.
 DEFAULT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -103,6 +105,20 @@ FLIGHT_SETTLE_S = 30.0
 
 #: Numeric fields closer together than this count as unchanged.
 FLIGHT_EPSILON = 0.02
+
+
+KEEPING = group(
+    "log",
+    flight_recorder=Spec(
+        False, help="Whether the flight recorder starts with the car."),
+    max_age_days=Spec(
+        float(MAX_AGE_DAYS), unit="days", bounds=(1.0, 365.0),
+        help="Anything in the log directory older than this is swept."),
+    free_floor_mb=Spec(
+        float(FREE_FLOOR_MB), unit="MB", bounds=(100.0, 20000.0),
+        help="Below this much free space the sweep stops being polite. No "
+             "log is worth more than a working rootfs."),
+)
 
 
 class _Rotating(logging.handlers.RotatingFileHandler):
@@ -366,7 +382,7 @@ class Logbook:
         # 1. Age. Catches files an older version of this code left behind
         #    under names nothing rotates any more.
         for entry in list(spare):
-            if now - entry["mtime"] > MAX_AGE_DAYS * 86400:
+            if now - entry["mtime"] > KEEPING.max_age_days * 86400:
                 removed += self._remove(entry["name"])
                 spare.remove(entry)
 
@@ -384,7 +400,7 @@ class Logbook:
         #    filling because of something else entirely, and that is exactly
         #    when a robot should stop contributing.
         free_mb = self._free_mb()
-        while free_mb < FREE_FLOOR_MB and spare:
+        while free_mb < KEEPING.free_floor_mb and spare:
             entry = spare.pop(0)
             removed += self._remove(entry["name"])
             free_mb = self._free_mb()

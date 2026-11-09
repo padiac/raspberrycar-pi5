@@ -21,19 +21,30 @@ import time
 
 from behaviors import build_behaviors
 from calibration import Calibration
-from preferences import Preferences
-from diagnostics.logbook import book
+from settings import Spec, group, settings
+from diagnostics.logbook import KEEPING, book
 from control import PathRecorder, SafetyLayer
 from control.turning import TurnTracker
 import hal
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
 from hal.gamepad import Gamepad
-from perception.clip import ClipRecorder
 from perception.pipeline import VisionPipeline
+from perception.clip import ClipRecorder
+from perception.detector_settings import LOOKING
+from perception.pipeline import SIGHT
 from perception.types import WorldState
 
 CONTROL_HZ = 20.0
+
+
+DRIVE = group(
+    "drive",
+    speed_limit=Spec(
+        0.40, bounds=(0.05, 1.0),
+        help="Ceiling on commanded speed. The trigger scales within it, so "
+             "this is the top of the range rather than a fixed speed."),
+)
 
 
 def _optional(name, factory):
@@ -80,8 +91,11 @@ class Robot:
         #: either file. Both are read here, before any hardware exists, so
         #: that nothing is constructed with a default somebody overrode
         #: months ago.
-        self.preferences = Preferences()
-        self.speed_limit = self.preferences.get("speed_limit")
+        #: The whole register, handed to the hardware drivers and the web
+        #: layer. One object rather than one per subject: the point of the
+        #: register is that there is exactly one place a setting lives.
+        self.settings = settings
+        self.speed_limit = DRIVE.speed_limit
         self.drivetrain = _optional("drivetrain", build_drivetrain)
 
         # Which sensor is which piece of hardware is not decided here any
@@ -96,7 +110,7 @@ class Robot:
         # one.
         self.link = getattr(self.drivetrain, "link", None)
         context = hal.Context(link=self.link, calibration=self.calibration,
-                              preferences=self.preferences)
+                              preferences=self.settings)
         self.rangefinder = self._device(context, "range")
         self.pan = self._device(context, "pan")
         self.proximity = self._device(context, "proximity")
@@ -119,13 +133,10 @@ class Robot:
                 os.path.abspath(__file__))), "clips"),
             camera_off=lambda: not (self.camera and self.camera.enabled),
         ) if self.vision else None
-        self.safety = SafetyLayer(
-            stop_cm=self.preferences.get("stop_cm"),
-            slow_cm=self.preferences.get("slow_cm"),
-            enabled=self.preferences.get("safety_enabled"),
-            bump_guard=self.preferences.get("bump_guard"),
-            no_echo_ceiling=self.preferences.get("no_echo_ceiling"),
-        )
+        # No arguments: the reflex layer reads its thresholds from the
+        # register, so what the page sets is what the car does, with one
+        # copy of each number instead of one here and one in a file.
+        self.safety = SafetyLayer()
         self.recorder = PathRecorder()
         # Costs no wiring: the Pi already measures the rail it runs on.
         self.supply = self._device(context, "power")
@@ -209,9 +220,9 @@ class Robot:
 
         # Last, because every one of these touches something built above and
         # two of them need the control loop to have somewhere to write.
-        self._restore_preferences()
+        self._restore_settings()
 
-    def _restore_preferences(self):
+    def _restore_settings(self):
         """Apply the stored choices that depend on optional hardware.
 
         Separate from reading the file, which happens first thing, because a
@@ -220,14 +231,13 @@ class Robot:
         be, which is a reason to skip the setting and not to fail.
         """
         if self.detector is not None:
-            self.detector.configure(
-                confidence=self.preferences.get("detect_confidence"))
+            self.detector.configure(confidence=LOOKING.detect_confidence)
         if self.vision is not None:
-            self.vision.detect_target_fps = self.preferences.get("detect_fps")
-        if self.vision is not None and self.preferences.get("detect_enabled"):
+            self.vision.detect_target_fps = SIGHT.detect_fps
+        if self.vision is not None and SIGHT.detect_enabled:
             self.vision.set_detection(True)
             print("[prefs] object detection on, as last set", flush=True)
-        if self.preferences.get("flight_recorder"):
+        if KEEPING.flight_recorder:
             book.record(self.flight_row)
 
     def _device(self, context, kind):
@@ -632,7 +642,7 @@ class Robot:
         came back at the class default and gave no sign that it had.
         """
         self.speed_limit = max(0.10, min(1.0, float(value)))
-        self.preferences.set("speed_limit", self.speed_limit)
+        settings.set("drive.speed_limit", self.speed_limit)
         return self.speed_limit
 
     def set_safety(self, enabled=None, stop_cm=None, slow_cm=None,
@@ -640,23 +650,17 @@ class Robot:
         """Change the reflex layer and remember it. Returns its status."""
         changes = {}
         if enabled is not None:
-            self.safety.enabled = bool(enabled)
-            changes["safety_enabled"] = self.safety.enabled
+            changes["safety.enabled"] = bool(enabled)
         for key, raw in (("stop_cm", stop_cm), ("slow_cm", slow_cm),
-                         ("no_echo_ceiling", no_echo_ceiling)):
+                         ("no_echo_ceiling", no_echo_ceiling),
+                         ("bump_guard", bump_guard)):
             if raw is None:
                 continue
-            value = self.preferences.set(key, raw)
-            if value is None:
-                raise ValueError("%s out of range" % key)
-            setattr(self.safety, key, value)
-        if bump_guard is not None:
-            value = self.preferences.set("bump_guard", bump_guard)
-            if value is None:
-                raise ValueError("bump_guard must be off, auto or always")
-            self.safety.bump_guard = value
+            if settings.set("safety." + key, raw) is None:
+                raise ValueError("%s is not a value %s can take" % (raw, key))
         if changes:
-            self.preferences.update(changes)
+            settings.update(changes)
+        # Nothing is copied onto the layer: it reads the register.
         return self.safety.status()
 
     #: Video recording will not change state faster than this. Starting and
@@ -855,7 +859,7 @@ class Robot:
             book.record(self.flight_row)
         else:
             book.stop_recording()
-        self.preferences.set("flight_recorder", on)
+        settings.set("log.flight_recorder", on)
         return book.recording
 
     def _drive(self, velocity):

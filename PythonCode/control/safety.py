@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 import time
 
 from hal import Velocity
+from settings import Spec, group
 
 #: Closer than this (cm) and forward motion is refused entirely.
 STOP_CM = 20.0
@@ -75,6 +76,38 @@ FORWARD_MEMORY_S = 1.0
 #: by default.
 BUMP_FREEZE_S = 1.2
 
+#: The numbers above are the defaults; these are the knobs. Declared here,
+#: beside the paragraphs that explain what each one is for, and collected
+#: centrally so that one page can list and change every setting on the car.
+REFLEX = group(
+    "safety",
+    enabled=Spec(
+        True,
+        help="Whether the reflex layer acts at all. Stored because turning "
+             "it off is a decision somebody makes knowingly, and having it "
+             "come back on mid-experiment is its own hazard."),
+    stop_cm=Spec(
+        STOP_CM, unit="cm", bounds=(0.0, 200.0),
+        help="Forward motion refused closer than this. Stopping distance "
+             "sets it, not taste, so it is not the knob to turn when the "
+             "car feels over-protective."),
+    slow_cm=Spec(
+        SLOW_CM, unit="cm", bounds=(0.0, 400.0),
+        help="Forward motion throttled between stop_cm and here. This is "
+             "the knob to turn: set wide, the car is throttled all the time "
+             "in a flat and holding the trigger down does nothing."),
+    no_echo_ceiling=Spec(
+        NO_ECHO_CEILING, bounds=(0.0, 1.0),
+        help="Speed allowed when the ping times out. One means no limit -- "
+             "a timeout taken as open road. Glass, a curtain and a wall met "
+             "at an angle all return what an empty room returns."),
+    bump_guard=Spec(
+        "auto", choices=("off", "auto", "always"),
+        help="What a felt collision may do. auto blocks forward travel for "
+             "a behaviour and not for a human, who felt the same collision "
+             "and does not need their controls frozen."),
+)
+
 
 @dataclass
 class SafetyReport:
@@ -98,27 +131,25 @@ class SafetyReport:
 
 
 class SafetyLayer:
-    def __init__(self, stop_cm=STOP_CM, slow_cm=SLOW_CM, enabled=True,
-                 bump_guard="auto", no_echo_ceiling=NO_ECHO_CEILING):
-        self.stop_cm = stop_cm
-        self.slow_cm = slow_cm
-        self.enabled = enabled
-        #: Speed allowed when the ping times out. One means no limit, which
-        #: is to say: treat a timeout as open road and drive at it.
-        #:
-        #: That is a choice with a sharp edge and it belongs to whoever is
-        #: driving, not to this file. The argument for the limit is in the
-        #: comment on NO_ECHO_CEILING and has not changed: glass, a wall met
-        #: at an angle and a curtain all return exactly what an empty room
-        #: returns. The argument against is that crossing an actually empty
-        #: room at a crawl makes the car useless, and in a flat the timeout
-        #: is mostly the empty room. With it off, the front corners and the
-        #: bump reflex are what is left.
-        self.no_echo_ceiling = no_echo_ceiling
-        #: "off", "auto" or "always". See preferences.py for what they mean;
-        #: the short version is that "auto" trusts a human to have noticed
-        #: the collision themselves and does not trust a behaviour to.
-        self.bump_guard = bump_guard
+    #: Which of this layer's attributes come from the register.
+    TUNED = ("enabled", "stop_cm", "slow_cm", "no_echo_ceiling", "bump_guard")
+
+    def __init__(self, **overrides):
+        """Thresholds follow the register unless given explicitly.
+
+        The override exists for tests, which need a layer with particular
+        thresholds and must not reach into the settings every other part of
+        the process is reading -- a test that changes a global is a test
+        that changes the next test. The running robot passes nothing, so
+        what the web page sets is what the car does, with one copy of each
+        number rather than one here and one in a file.
+        """
+        self._overrides = {}
+        for key, value in overrides.items():
+            if key not in self.TUNED:
+                raise TypeError("SafetyLayer has no setting %r" % key)
+            if value is not None:
+                self._overrides[key] = value
         #: Set by the owner each tick, because whether a person is driving is
         #: a fact about the control stack and not about the world, and
         #: smuggling it into WorldState to avoid one assignment would make
@@ -126,6 +157,26 @@ class SafetyLayer:
         self.human_driving = False
         self.last = SafetyReport()
         self._bumped_at = None
+
+    def __getattr__(self, key):
+        # Only reached for attributes that are not set on the instance, so
+        # the overrides and everything else resolve normally first.
+        if key in SafetyLayer.TUNED:
+            overrides = self.__dict__.get("_overrides") or {}
+            if key in overrides:
+                return overrides[key]
+            return getattr(REFLEX, key)
+        raise AttributeError(key)
+
+    def __setattr__(self, key, value):
+        if key in SafetyLayer.TUNED:
+            # Changing a threshold on the layer would last until the next
+            # restart and tell nobody, which is the bug this register was
+            # built to end. Treated as an override so a test can still do
+            # it, while the robot goes through set_safety and persists.
+            self.__dict__.setdefault("_overrides", {})[key] = value
+            return
+        object.__setattr__(self, key, value)
 
     @property
     def bump_active(self):

@@ -216,7 +216,12 @@ class Context:
     def chosen(self, key, fallback=None):
         if self.preferences is None:
             return fallback
-        value = self.preferences.get(key)
+        try:
+            value = self.preferences.get(key)
+        except KeyError:
+            # Asking about a setting that no module has declared is a
+            # driver asking whether something is configured, not a bug.
+            return fallback
         return fallback if value is None else value
 
 

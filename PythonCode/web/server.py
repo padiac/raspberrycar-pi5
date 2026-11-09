@@ -15,6 +15,7 @@ from flask import (
 )
 
 from diagnostics.logbook import book
+from settings import settings
 
 from hal import Velocity
 from robot import Robot
@@ -372,7 +373,7 @@ def api_detect():
     data = request.get_json(silent=True) or {}
     if "enabled" in data:
         robot.vision.set_detection(data["enabled"])
-        robot.preferences.set("detect_enabled", robot.vision.detect_enabled)
+        settings.set("vision.detect_enabled", robot.vision.detect_enabled)
     if "conf" in data or "classes" in data:
         robot.detector.configure(
             confidence=data.get("conf"), classes=data.get("classes")
@@ -382,10 +383,10 @@ def api_detect():
             # the useful default, and a list of names saved from one session
             # silently narrowing what the next one can see is a worse
             # surprise than retyping it.
-            robot.preferences.set("detect_confidence",
-                                  robot.detector.confidence)
+            settings.set("vision.detect_confidence",
+                         robot.detector.confidence)
     if "target_fps" in data:
-        stored = robot.preferences.set("detect_fps", data["target_fps"])
+        stored = settings.set("vision.detect_fps", data["target_fps"])
         if stored is None:
             return jsonify(error="target_fps must be a number up to 60"), 400
         robot.vision.detect_target_fps = stored
@@ -488,6 +489,33 @@ def api_clip_delete(name):
     if not ok:
         return jsonify(error=message), 409
     return jsonify(message=message, clips=robot.clips.clips())
+
+
+@app.route("/api/settings")
+def api_settings():
+    """Every tunable on the car, grouped, with its help and its range.
+
+    The register exists so there is one place to look; this is that place
+    made visible. What differs from the code defaults is called out
+    separately, because that is the first thing worth knowing when a car is
+    behaving unlike the code says it should.
+    """
+    return jsonify(groups=settings.describe(), changed=settings.changed())
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_set():
+    data = request.get_json(silent=True) or {}
+    if data.get("reset"):
+        return jsonify(value=settings.reset(data["reset"]),
+                       changed=settings.changed())
+    changes = {k: v for k, v in data.items() if k != "reset"}
+    done = settings.update(changes)
+    refused = sorted(set(changes) - set(done))
+    # Refused rather than clamped, and said so: a clamp quietly accepts a
+    # request nobody meant and never tells the sender that the number it
+    # asked for is not the number in force.
+    return jsonify(changed=settings.changed(), applied=done, refused=refused)
 
 
 @app.route("/api/log")

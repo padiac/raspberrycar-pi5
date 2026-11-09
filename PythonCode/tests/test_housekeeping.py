@@ -26,7 +26,7 @@ from control.safety import SafetyLayer, BUMP_FREEZE_S
 from diagnostics.logbook import Logbook
 from hal import Velocity
 from perception.types import WorldState
-from preferences import Preferences, coerce
+from settings import Registry, Spec
 
 PASSES = []
 FAILS = []
@@ -35,6 +35,18 @@ FAILS = []
 def check(label, condition):
     (PASSES if condition else FAILS).append(label)
     print("  %-6s %s" % ("PASS" if condition else "FAIL", label))
+
+
+def _raises(target, method, *args):
+    """True if the call blows up, which is the behaviour being checked."""
+    try:
+        if method is None:
+            target.speed_limit = args[0]
+        else:
+            getattr(target, method)(*args)
+    except Exception:       # noqa: BLE001 - the kind is checked by the caller
+        return True
+    return False
 
 
 def section(title):
@@ -103,37 +115,78 @@ check("it never adds motion of its own",
 
 
 # =========================================================================
-section("preferences survive, and refuse nonsense")
+section("settings survive, and refuse nonsense")
 
-path = "/tmp/car_prefs_test.json"
+# A registry of its own, with its own file: a test that writes to the one
+# the rest of the process is reading is a test that changes the next test,
+# and on this machine it would also change the car.
+path = "/tmp/car_settings_test.json"
 if os.path.exists(path):
     os.remove(path)
-prefs = Preferences(path)
-check("a fresh file gives defaults", prefs.get("speed_limit") == 0.40)
-check("storing returns what was stored", prefs.set("speed_limit", 0.75) == 0.75)
-check("reloading gets it back", Preferences(path).get("speed_limit") == 0.75)
+register = Registry(path)
+register.load()
+drive = register.group(
+    "drive",
+    speed_limit=Spec(0.40, bounds=(0.05, 1.0), help="ceiling on speed"),
+    mode=Spec("auto", choices=("off", "auto", "always"), help="what to do"),
+    noisy=Spec(True, help="whether to say so"),
+)
 
-check("a speed above full is refused", prefs.set("speed_limit", 5) is None)
-check("and the old value stands", prefs.get("speed_limit") == 0.75)
+check("an undeclared setting is a programming error",
+      _raises(register, "get", "drive.nonexistent"))
+check("a fresh register gives the declared default", drive.speed_limit == 0.40)
+check("setting returns what was stored",
+      register.set("drive.speed_limit", 0.75) == 0.75)
+check("and the group reads it back", drive.speed_limit == 0.75)
+
+second = Registry(path)
+second.load()
+second.group("drive", speed_limit=Spec(0.40, bounds=(0.05, 1.0)))
+check("a new process picks it up", second.get("drive.speed_limit") == 0.75)
+
+check("a value above the bound is refused",
+      register.set("drive.speed_limit", 5) is None)
+check("and the old one stands", drive.speed_limit == 0.75)
 check("a word where a number goes is refused",
-      prefs.set("slow_cm", "soon") is None)
-check("an unknown guard is refused", prefs.set("bump_guard", "maybe") is None)
-check("a known one is taken, any case", prefs.set("bump_guard", "ALWAYS") == "always")
-check("booleans take a checkbox string", coerce("detect_enabled", "true") is True)
-check("unknown keys are refused", coerce("fly_to_moon", 1) is None)
+      register.set("drive.speed_limit", "soon") is None)
+check("an unknown choice is refused", register.set("drive.mode", "maybe") is None)
+check("a known one is taken, any case",
+      register.set("drive.mode", "ALWAYS") == "always")
+check("a checkbox string becomes a boolean",
+      register.set("drive.noisy", "false") is False)
+check("setting something nobody declared is refused",
+      register.set("drive.nonexistent", 1) is None)
 
-# A hand-edited file is the case this guards: a stored value out of range must
-# not become the robot's behaviour just because somebody typed it.
+# Assigning to the group would last until the next restart and tell nobody,
+# which is the whole failure the register was built to end.
+check("the group cannot be assigned to", _raises(drive, None, 0.5))
+
+check("reset puts the default back",
+      register.reset("drive.speed_limit") == 0.40)
+check("and what is left is only what differs from the code",
+      set(register.changed()) == {"drive.mode", "drive.noisy"})
+
+described = register.describe()
+check("everything can be listed", "drive" in described)
+check("with its help, unit and range",
+      all({"help", "unit", "bounds", "default", "value"} <= set(entry)
+          for entry in described["drive"]))
+
+# A stored value for a module that is not loaded must survive, or removing a
+# module for an afternoon would silently discard its settings.
 with open(path, "w", encoding="utf-8") as handle:
-    handle.write('{"speed_limit": 99, "slow_cm": 55}')
-reloaded = Preferences(path)
-check("a hand-edited bad value falls back to the default",
-      reloaded.get("speed_limit") == 0.40)
-check("while its good neighbour is still read", reloaded.get("slow_cm") == 55.0)
+    handle.write('{"drive.mode": "off", "absent.thing": 7}')
+third = Registry(path)
+third.load()
+third.group("drive", mode=Spec("auto", choices=("off", "auto", "always")))
+third.set("drive.mode", "always")
+with open(path, encoding="utf-8") as handle:
+    kept = handle.read()
+check("a setting whose module is absent is kept, not dropped",
+      "absent.thing" in kept)
 os.remove(path)
 
 
-# =========================================================================
 section("the logbook cannot outgrow its ceiling")
 
 directory = "/tmp/car_logs_test"

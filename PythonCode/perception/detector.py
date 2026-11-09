@@ -5,6 +5,8 @@ built for ARM CPUs and measured about four times faster on this Pi 5 -- 58 fps
 against 14 fps at 320 px.
 """
 
+from .detector_settings import LOOKING  # noqa: F401
+
 import os
 import threading
 

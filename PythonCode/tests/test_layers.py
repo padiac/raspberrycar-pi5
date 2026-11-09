@@ -352,9 +352,16 @@ check_eq("  and reversing away from it still allowed", out.vx, -1.0)
 #
 # So it may go, because refusing to cross open space would make it useless,
 # but only at a crawl.
-out = safety.filter(Velocity(vx=1.0), WorldState(range_cm=-1.0, range_expected=True))
+# Spelled out rather than taken from the register, which is where the
+# running car gets it: this is a check on the mechanism, not on whatever
+# somebody has set today. Written the other way it failed the moment the
+# creep was switched off from the web page, which is a test reporting on
+# the operator rather than on the code.
+creeping = SafetyLayer(no_echo_ceiling=NO_ECHO_CEILING)
+out = creeping.filter(Velocity(vx=1.0),
+                      WorldState(range_cm=-1.0, range_expected=True))
 check_eq("nothing came back: creeps rather than charging", out.vx, NO_ECHO_CEILING)
-check_eq("  and says why", any("creep" in r for r in safety.last.interventions), True)
+check_eq("  and says why", any("creep" in r for r in creeping.last.interventions), True)
 
 out = safety.filter(Velocity(vx=0.1), WorldState(range_cm=-1.0, range_expected=True))
 check_eq("  a slow request is left alone", out.vx, 0.1)

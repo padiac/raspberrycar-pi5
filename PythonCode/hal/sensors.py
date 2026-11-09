@@ -5,6 +5,8 @@ boolean with a documented meaning, so nothing above has to remember that these
 particular sensors pull their output *low* when they see something.
 """
 
+from settings import Spec, group
+
 from .base import (
     Context, FloorSensor, PanMount, ProximitySensor, RangeSensor, driver,
 )
@@ -438,8 +440,21 @@ def _proximity_on_pins(context):
     return ProximityArray()
 
 
+#: Whether downward line sensors are wired to this Pi.
+#
+# Off until somebody says otherwise, for the reason the infrared had to
+# learn: an unconnected input sits at its pull-up and reads exactly like a
+# clear floor, so a sensor nobody has confirmed exists must not be allowed
+# to vote on where the car drives.
+WIRING = group(
+    "hardware",
+    floor_fitted=Spec(
+        False, help="Whether downward line sensors are wired to the Pi."),
+)
+
+
 @driver("floor", "gpio")
 def _floor_on_pins(context):
-    if not context.chosen("floor_fitted", False):
+    if not WIRING.floor_fitted:
         return None
     return FloorArray()
