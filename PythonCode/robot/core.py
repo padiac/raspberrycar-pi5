@@ -28,6 +28,7 @@ from hal import Velocity, build_drivetrain
 from hal.gamepad import Gamepad
 from perception.detector_settings import LOOKING
 from perception.pipeline import SIGHT
+from perception.polar import PolarMemory
 from perception.types import WorldState
 
 from . import aiming, telemetry
@@ -179,6 +180,11 @@ class Robot:
         self.allowed = Velocity.STOP
         self.behavior_error = None
         self.world = WorldState()
+        #: What has been seen in each direction lately. Filled on every
+        #: tick from wherever the head happens to be pointing, so it
+        #: accumulates a picture of the room whether the car is patrolling
+        #: or being driven by hand.
+        self.scan = PolarMemory()
         #: Undoes the wrap in the reported heading, so a behaviour can ask
         #: how far the car has turned and whether it is turning at all.
         self.turning = TurnTracker()
@@ -622,6 +628,13 @@ class Robot:
             floor_cm = self.blind_at(range_angle)
             if floor_cm is not None and range_cm <= floor_cm + self.BLIND_MARGIN_CM:
                 blind = True
+
+        # File this reading under where the head was pointing. Nothing
+        # else in the robot was keeping the spokes together, so the shape
+        # of the room existed only inside the patrol behaviour.
+        if not blind:
+            self.scan.note(self.pan.angle if self.pan else 0.0, range_cm,
+                           time.monotonic())
 
         self.turning.update(
             self.link.telemetry.heading if self.link else None,

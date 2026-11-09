@@ -686,6 +686,21 @@
 </div>
 
 <div class="panel">
+  <h2>What it sees <em id="fanwhen"></em></h2>
+  <canvas id="fan" width="760" height="420"></canvas>
+  <p class="hint">Looking down on the car. The rangefinder measures one
+    direction at a time, so this is not a snapshot -- each wedge is the
+    last reading taken in that direction, and it fades as it ages, because
+    the car has moved since. Hollow wedges at the rim are directions where
+    the pulse went out and nothing came back: that is usually open floor,
+    and indoors it is just as often glass, a curtain or the side of a sofa,
+    which return exactly what an empty room returns. The red ring is where
+    forward motion is refused and the amber one where it starts being
+    throttled; the two dots are the corner infrared, which sees about eight
+    centimetres and lights up just before contact.</p>
+</div>
+
+<div class="panel">
   <h2>Diagnostics</h2>
   <div class="tel">
     <div><span>Range</span><b id="range">--</b></div>
@@ -1396,6 +1411,152 @@ $('irtrust').onclick = async () => {
                           body: JSON.stringify({fitted: !on})});
 };
 
+// ---- the fan: what the rangefinder has seen, by direction ---------------
+//
+// A top-down picture of the room as a car with one spinning sensor can
+// know it. Drawn from the robot's polar memory rather than from the latest
+// reading, which is the only way a single sensor ever amounts to a shape.
+
+const CAR_W = 15, CAR_L = 28;     // centimetres, as measured
+const FAN_MIN_RANGE = 120;        // never zoom in closer than this
+// How wide a wedge to draw. The memory files readings every five degrees,
+// but the beam is about fifteen wide and a reading is a statement about
+// all of it -- drawing a five-degree spike claims a precision the sensor
+// does not have, and leaves the picture looking like a hedgehog rather
+// than like a room. Readings thirty degrees apart therefore leave honest
+// gaps between them: nobody has looked there.
+const BEAM_DEG = 15;
+
+function drawFan(scan, safety, proximity, pan) {
+  const c = $('fan'), ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue('--accent').trim() || '#2f6fed';
+  const muted = css.getPropertyValue('--muted').trim() || '#8a8f98';
+  const bad = css.getPropertyValue('--bad').trim() || '#d9534f';
+  const warn = css.getPropertyValue('--warn').trim() || '#d2a106';
+
+  const readings = (scan && scan.readings) || [];
+  const bucket = (scan && scan.bucket) || 5;
+  const memory = (scan && scan.memory_s) || 4;
+
+  // The car sits near the bottom, pointing up. Scale so the furthest real
+  // reading fits, with a floor so an empty room does not zoom to nothing.
+  const ox = W / 2, oy = H - 34;
+  let furthest = FAN_MIN_RANGE;
+  for (const r of readings) if (r.echo && r.cm > furthest) furthest = r.cm;
+  furthest = Math.min(furthest * 1.1, 400);
+  const scale = (oy - 16) / furthest;             // pixels per centimetre
+  const toXY = (deg, cm) => {
+    const a = (deg - 90) * Math.PI / 180;         // 0 deg is up, + is right
+    return [ox + Math.cos(a) * cm * scale, oy + Math.sin(a) * cm * scale];
+  };
+
+  // the arc the sensor can be aimed through
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.arc(ox, oy, furthest * scale, Math.PI, 2 * Math.PI);
+  ctx.closePath();
+  ctx.fillStyle = accent + '0d';
+  ctx.fill();
+  ctx.restore();
+
+  // distance rings, every 50cm, plus the two thresholds
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  for (let cm = 50; cm <= furthest; cm += 50) {
+    ctx.beginPath();
+    ctx.arc(ox, oy, cm * scale, Math.PI, 2 * Math.PI);
+    ctx.strokeStyle = muted + '33';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = muted + '99';
+    ctx.fillText(cm + 'cm', ox + 4, oy - cm * scale - 3);
+  }
+  for (const ring of [[safety && safety.stop_cm, bad],
+                      [safety && safety.slow_cm, warn]]) {
+    if (!ring[0]) continue;
+    ctx.beginPath();
+    ctx.arc(ox, oy, ring[0] * scale, Math.PI, 2 * Math.PI);
+    ctx.strokeStyle = ring[1] + 'aa';
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // the readings themselves
+  for (const r of readings) {
+    const fade = Math.max(0.18, 1 - r.age / memory);
+    const half = Math.max(bucket, BEAM_DEG) / 2;
+    const a0 = (r.angle - half - 90) * Math.PI / 180;
+    const a1 = (r.angle + half - 90) * Math.PI / 180;
+    const cm = r.echo ? r.cm : furthest;
+    ctx.beginPath();
+    ctx.moveTo(ox, oy);
+    ctx.arc(ox, oy, Math.max(cm, 1) * scale, a0, a1);
+    ctx.closePath();
+    if (r.echo) {
+      ctx.fillStyle = accent + Math.round(fade * 180).toString(16).padStart(2, '0');
+      ctx.fill();
+      const [tx, ty] = toXY(r.angle, cm);
+      ctx.beginPath();
+      ctx.arc(tx, ty, 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = fade;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    } else {
+      // Nothing came back. Drawn at the rim and hollow, because it is not
+      // a measurement of open space -- it is the absence of one.
+      ctx.strokeStyle = muted + Math.round(fade * 140).toString(16).padStart(2, '0');
+      ctx.setLineDash([3, 4]);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // where the head is pointing now
+  if (pan && pan.angle !== undefined && pan.angle !== null) {
+    const [hx, hy] = toXY(pan.angle, furthest);
+    ctx.beginPath();
+    ctx.moveTo(ox, oy);
+    ctx.lineTo(hx, hy);
+    ctx.strokeStyle = accent + '66';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // the car, to scale, with its infrared corners
+  const w = CAR_W * scale, l = CAR_L * scale;
+  ctx.fillStyle = muted + '55';
+  ctx.strokeStyle = muted;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(ox - w / 2, oy - l / 2, w, l);
+  ctx.fill();
+  ctx.stroke();
+  const corners = [[-1, proximity && proximity.left], [1, proximity && proximity.right]];
+  for (const [side, lit] of corners) {
+    ctx.beginPath();
+    ctx.arc(ox + side * w / 2, oy - l / 2, 3.5, 0, 2 * Math.PI);
+    ctx.fillStyle = lit ? bad : muted + '88';
+    ctx.fill();
+  }
+
+  if (!readings.length) {
+    ctx.fillStyle = muted;
+    ctx.textAlign = 'center';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText('nothing measured in the last ' + memory + ' seconds',
+                 ox, oy - 60);
+  }
+}
+
 // ---- range sparkline ----------------------------------------------------
 const history = [];
 const HISTORY = 60;           // 60 samples at 2 Hz == the last 30 seconds
@@ -1516,6 +1677,12 @@ async function telemetry() {
     $('hudhint').hidden = !detections.length;
 
     renderObjects(d);
+
+    const scan = d.scan || {};
+    drawFan(scan, sf, d.proximity, d.pan);
+    $('fanwhen').textContent = scan.spokes
+      ? scan.spokes + ' direction' + (scan.spokes === 1 ? '' : 's') + ' measured'
+      : 'nothing measured lately';
 
     // diagnostics
     const a = d.allowed || {vx: 0, vy: 0, omega: 0};

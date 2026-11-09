@@ -75,6 +75,10 @@ def describe(robot):
             else None
         ),
         "floor": world.floor.as_dict() if world.floor else None,
+        # The room as the car has measured it, one spoke at a time. Not a
+        # map -- there is no position to hang one on -- but the nearest
+        # thing a car with a single spinning sensor has to a picture.
+        "scan": robot.scan.status(time.monotonic()),
         # The serial link itself, which was never reported. Its counters
         # are the only place a fault that comes and goes leaves a mark:
         # how many times the board has restarted by itself, and how many

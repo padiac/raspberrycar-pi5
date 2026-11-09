@@ -408,6 +408,60 @@ check_eq("largest() returns None when absent", w.largest("cat"), None)
 check_eq("labels()", w.labels(), ["bottle", "person"])
 
 print()
+
+# =========================================================================
+# What has been seen in each direction lately.
+#
+# One rangefinder on a servo measures one direction at a time, so the shape
+# of a room only exists if somebody keeps the spokes together. These check
+# that keeping them does not quietly invent anything.
+
+from perception.polar import PolarMemory, bucket     # noqa: E402
+
+check_eq("directions are rounded to the resolution the beam supports",
+         bucket(32.0), 30.0)
+check_eq("and rounding goes to the nearest, not down", bucket(33.0), 35.0)
+
+memory = PolarMemory(memory_s=4.0)
+memory.note(30.0, 120.0, 100.0)
+memory.note(-30.0, 40.0, 100.5)
+fresh = memory.readings(101.0)
+check_eq("both spokes are remembered", len(fresh), 2)
+check_eq("and come back in order, left first", fresh[0]["angle"], -30.0)
+check_eq("carrying how old they are", round(fresh[1]["age"], 1), 1.0)
+
+# A silence is worth recording. It is not a distance, but "I looked there
+# and heard nothing" is a different thing from "I have not looked there",
+# and a picture that cannot tell them apart is the one that drove this car
+# into a sofa.
+memory.note(60.0, -1.0, 101.0)
+silent = [r for r in memory.readings(101.0) if r["angle"] == 60.0][0]
+check_eq("a silence is kept", silent is not None, True)
+check_eq("and is marked as not an echo", silent["echo"], False)
+check_eq("a measurement is marked as one",
+         memory.readings(101.0)[0]["echo"], True)
+
+# Nothing to file is not the same as filing nothing.
+before = len(memory.readings(101.0))
+memory.note(0.0, None, 101.0)
+memory.note(None, 50.0, 101.0)
+check_eq("a reading that never arrived is not invented",
+         len(memory.readings(101.0)), before)
+
+# The car moves while it looks, so an old spoke describes a room it has
+# left. Drawing that as current is worse than drawing nothing.
+check_eq("a stale reading drops out", len(memory.readings(106.0)), 0)
+memory.prune(106.0)
+check_eq("and is not kept around", len(memory._seen), 0)
+
+# Two readings in the same direction: the later one wins outright rather
+# than being averaged with a measurement of somewhere else.
+memory.note(45.0, 200.0, 110.0)
+memory.note(44.0, 30.0, 110.5)
+only = memory.readings(111.0)
+check_eq("the same direction twice is one spoke", len(only), 1)
+check_eq("and it is the newer reading", only[0]["cm"], 30.0)
+
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
     raise SystemExit(1)
