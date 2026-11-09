@@ -35,6 +35,9 @@ from perception.detector_settings import LOOKING
 from perception.pipeline import SIGHT
 from perception.types import WorldState
 
+from . import aiming, telemetry
+from .hardware import Hardware
+
 CONTROL_HZ = 20.0
 
 
@@ -96,50 +99,35 @@ class Robot:
         #: register is that there is exactly one place a setting lives.
         self.settings = settings
         self.speed_limit = DRIVE.speed_limit
-        self.drivetrain = _optional("drivetrain", build_drivetrain)
+        #: Which devices exist, and in what order they are built, is one
+        #: module's business -- see robot/hardware.py. What is left here is
+        #: what the robot does with them.
+        self.hw = Hardware(self.calibration, self.settings)
 
-        # Which sensor is which piece of hardware is not decided here any
-        # more. When an ESP32 is driving, the sensors wired to it come back
-        # over the same link rather than off this board's pins -- and that
-        # used to be an `if` right here, with every downstream line written
-        # against whichever class came out of it. Now the drivers in hal
-        # say for themselves what they need, and this asks for a role.
-        #
-        # The practical difference: adding a time-of-flight array in place
-        # of the ultrasonic is a new file in hal and nothing at all in this
-        # one.
-        self.link = getattr(self.drivetrain, "link", None)
-        context = hal.Context(link=self.link, calibration=self.calibration,
-                              preferences=self.settings)
-        self.rangefinder = self._device(context, "range")
-        self.pan = self._device(context, "pan")
-        self.proximity = self._device(context, "proximity")
-        self.floor = self._device(context, "floor")
+        # Named aliases rather than reaching through self.hw everywhere.
+        # Behaviours and the web layer both say robot.rangefinder, and
+        # rewriting several hundred call sites to say robot.hw.rangefinder
+        # would be churn with nothing on the other side of it. The aliases
+        # are set once, here, and the assembly order lives in one file.
+        self.drivetrain = self.hw.drivetrain
+        self.link = self.hw.link
+        self.rangefinder = self.hw.rangefinder
+        self.pan = self.hw.pan
+        self.proximity = self.hw.proximity
+        self.floor = self.hw.floor
+        self.detector = self.hw.detector
+        self.camera = self.hw.camera
+        self.vision = self.hw.vision
+        self.clips = self.hw.clips
+        self.supply = self.hw.supply
         if self.link is not None:
             self.link.on_reconnect = self._link_came_back
-        self.detector = _optional(
-            "detector", lambda: __import__("perception.detector", fromlist=["Detector"]).Detector()
-        )
-        self.camera = self._device(context, "camera")
 
-        self.vision = (
-            VisionPipeline(self.camera, self.detector) if self.camera else None
-        )
-        # Clips live beside the code rather than in the home directory, so
-        # the card's contents are obvious to anyone who goes looking.
-        self.clips = ClipRecorder(
-            self.vision.frames,
-            os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "clips"),
-            camera_off=lambda: not (self.camera and self.camera.enabled),
-        ) if self.vision else None
         # No arguments: the reflex layer reads its thresholds from the
         # register, so what the page sets is what the car does, with one
         # copy of each number instead of one here and one in a file.
         self.safety = SafetyLayer()
         self.recorder = PathRecorder()
-        # Costs no wiring: the Pi already measures the rail it runs on.
-        self.supply = self._device(context, "power")
 
         # A controller is not a behaviour, it is a driver -- so it goes in
         # through the same door as the on-screen pad and gets the same
@@ -239,25 +227,6 @@ class Robot:
             print("[prefs] object detection on, as last set", flush=True)
         if KEEPING.flight_recorder:
             book.record(self.flight_row)
-
-    def _device(self, context, kind):
-        """Build the best available device of a kind, saying what happened.
-
-        Absent hardware is ordinary here -- no camera ribbon, no board
-        plugged in, a library nobody installed -- so this reports and
-        carries on rather than raising. What it must not do is fail
-        silently: a car that comes up with no rangefinder and says nothing
-        looks exactly like a car whose rangefinder is lying.
-        """
-        def grumble(name, exc):
-            print(f"[hw] {kind} driver {name}: {exc}", flush=True)
-
-        device = hal.build(kind, context, on_error=grumble)
-        if device is None:
-            print(f"[hw] {kind}: none available", flush=True)
-        else:
-            print(f"[hw] {kind}: {device.label}", flush=True)
-        return device
 
     # -- capabilities -------------------------------------------------------
 
@@ -480,105 +449,6 @@ class Robot:
 
     def pan_centre(self):
         return self.pan.centre() if self.pan else None
-
-    def _link_came_back(self, was_reset):
-        """Put back the state that lives on the far end of the serial link.
-
-        Velocity looks after itself: the control loop sends one every tick and
-        the firmware stops on its own if it hears nothing. The servo does not.
-        A hobby servo has no feedback, so the only record of where the head is
-        pointing is the number this side remembers -- and a firmware that has
-        just booted has centred the head without telling anyone. Left alone,
-        every range reading after a reset is filed under an angle the head is
-        not at, and the scan table quietly becomes fiction.
-        """
-        if not was_reset or self.pan is None:
-            return
-        self.pan.look(self.pan.angle)
-        print("[hw] board reset, re-aimed head to %.0f deg" % self.pan.angle, flush=True)
-
-    #: How near a reading has to be to the recorded floor to count as looking
-    #: at the car rather than past it. Wide enough for the centimetre or two
-    #: of jitter a rigid target still produces, narrow enough that a real
-    #: obstacle at a similar distance is not waved away.
-    BLIND_MARGIN_CM = 3.0
-    #: Nothing further than this is taken to be part of the car. Furniture
-    #: standing still during the calibration would otherwise be recorded as a
-    #: permanent blind spot and then ignored for the rest of the car's life.
-    BLIND_MAX_CM = 40.0
-    #: A rigid target attached to the chassis gives the same figure every
-    #: time. Anything that wanders more than this is the room, not the car.
-    BLIND_SPREAD_CM = 4.0
-
-    def blind_at(self, angle):
-        """The floor for that angle, or None if nothing was recorded."""
-        blind = self.calibration.get("pan_blind") or {}
-        if angle is None or not blind:
-            return None
-        nearest = min(blind, key=lambda k: abs(float(k) - angle))
-        if abs(float(nearest) - angle) > 10.0:
-            return None
-        return float(blind[nearest])
-
-    def calibrate_pan_blind(self, samples=9, dwell=0.9, angles=None):
-        """Learn what parts of the car the sensor can see, angle by angle.
-
-        Wants open space around it, because the method cannot tell a bracket
-        from a wall except by distance and steadiness -- so anything far off
-        or wavering is discarded rather than recorded.
-
-        What this buys is the difference between "there is an obstacle that
-        way" and "I cannot see that way". A wire eighteen centimetres from the
-        head reads as an obstacle at every sweep, drags down the score of the
-        angles either side of it, and quietly condemns that whole side of the
-        car for good -- the way out is always somewhere else, and the room the
-        car will not enter is not blocked at all.
-        """
-        if self.pan is None or self.rangefinder is None:
-            return None
-        angles = angles or (-90.0, -45.0, 0.0, 45.0, 90.0)
-        found = {}
-        for angle in angles:
-            self.pan.look(angle)
-            time.sleep(dwell)
-            taken = []
-            for _ in range(samples):
-                reading = self.link.telemetry.range_cm if self.link else None
-                if reading is not None and reading > 0:
-                    taken.append(reading)
-                time.sleep(0.12)
-            if len(taken) < samples * 0.6:
-                continue                      # heard nothing: sees past itself
-            taken.sort()
-            median = taken[len(taken) // 2]
-            if median > self.BLIND_MAX_CM:
-                continue                      # too far to be part of the car
-            if taken[-1] - taken[0] > self.BLIND_SPREAD_CM:
-                continue                      # wandering, so it is the room
-            found[str(int(angle))] = round(median, 1)
-        self.pan.centre()
-        self.calibration.set("pan_blind", found)
-        return found
-
-    def set_pan_reversed(self, reversed_):
-        """Say which way the head runs, and remember it."""
-        if self.pan is None:
-            return None
-        self.pan.set_reversed(reversed_)
-        self.calibration.set("pan_reversed", self.pan.reversed)
-        return self.pan.reversed
-
-    def set_pan_trim(self, trim):
-        """Aim the head, and remember where forward turned out to be.
-
-        The saving lives here rather than in PanServo because a HAL device
-        should not know what a filesystem is; it knows how to point a servo.
-        """
-        if self.pan is None:
-            return None
-        self.pan.set_trim(trim)
-        self.calibration.set("pan_trim", self.pan.trim)
-        return self.pan.trim
 
     def cycle_behavior(self):
         """Next behaviour in the list, skipping any the hardware cannot do.
@@ -918,89 +788,32 @@ class Robot:
 
     # -- telemetry ----------------------------------------------------------
 
+    # -- aiming the head ----------------------------------------------------
+    #
+    # Delegated rather than deleted: these are part of what a Robot is for,
+    # and the page and the pad both call them. What has moved is the body,
+    # which is calibration arithmetic and has nothing to do with running a
+    # control loop.
+
+    def blind_at(self, angle):
+        return aiming.blind_at(self, angle)
+
+    def calibrate_pan_blind(self, samples=9, dwell=0.9, angles=None):
+        return aiming.calibrate_pan_blind(self, samples, dwell, angles)
+
+    def set_pan_reversed(self, reversed_):
+        return aiming.set_pan_reversed(self, reversed_)
+
+    def set_pan_trim(self, trim):
+        return aiming.set_pan_trim(self, trim)
+
+    def _link_came_back(self, was_reset):
+        return aiming._link_came_back(self, was_reset)
+
+    # -- telemetry ----------------------------------------------------------
+
     def telemetry(self):
-        world = self.world
-        return {
-            "behavior": self.behavior.name,
-            "behavior_label": self.behavior.label,
-            "behavior_status": self.behavior.status(),
-            "behavior_error": self.behavior_error,
-            "behavior_category": getattr(self.behavior, "category", "skill"),
-            "accepts_target": getattr(self.behavior, "accepts_target", False),
-            "moving": self.allowed.moving,
-            "requested": self.requested.as_dict(),
-            "allowed": self.allowed.as_dict(),
-            "safety": self.safety.status(),
-            "speed_limit": self.speed_limit,
-            "supply": self.supply.status() if self.supply else None,
-            "idle": {
-                "after_s": self.idle_camera_after,
-                "quiet_s": round(time.monotonic() - self.last_activity, 1),
-                "camera_slept": self.camera_slept,
-                "watchers": self.stream_clients,
-            },
-            "peers": self.peer_list(),
-            "path": self.recorder.status(),
-            "drivetrain": (
-                {**self.drivetrain.status(), "kinds": sorted(DRIVETRAINS),
-                 "kind": getattr(self.drivetrain, "kind", None)}
-                if self.drivetrain else None
-            ),
-            "range_cm": None if world.range_cm is None else round(world.range_cm, 1),
-            # What the safety layer actually judges on, which is not always
-            # what the head happens to be pointing at this instant.
-            "forward_cm": (None if world.forward_cm is None
-                           else round(world.forward_cm, 1)),
-            "forward_age": (None if world.forward_age is None
-                            else round(world.forward_age, 2)),
-            "pan": self.pan.status() if self.pan else None,
-            "clip": self.clips.status() if self.clips else None,
-            "gamepad": self.gamepad.status() if self.gamepad else None,
-            "proximity": world.proximity.as_dict() if world.proximity else None,
-            # What the pins say regardless of whether they are trusted yet,
-            # so wiring can be checked by waving a hand at them.
-            "imu": (
-                {"heading": self.link.telemetry.heading,
-                 "bumped": self.link.telemetry.bumped,
-                 **self.turning.status()}
-                if self.link else None
-            ),
-            "ir": (
-                {"fitted": self.proximity.fitted,
-                 "reporting": self.proximity.reporting,
-                 "pins": self.link.telemetry.proximity}
-                # Asked of the contract, not of one implementation: any
-                # proximity sensor says whether it is fitted and whether it
-                # is reporting, and the raw pins only exist when a board is
-                # sending them.
-                if self.proximity is not None and self.link is not None
-                else None
-            ),
-            "floor": world.floor.as_dict() if world.floor else None,
-            # The serial link itself, which was never reported. Its counters
-            # are the only place a fault that comes and goes leaves a mark:
-            # how many times the board has restarted by itself, and how many
-            # bytes arrived that were not lines. Both were invisible, and an
-            # invisible intermittent fault is one nobody can be told about.
-            "link": self.link.status() if self.link else None,
-            # The logbook is deliberately NOT here. This runs twice a second
-            # and its status walks the log directory, so putting it in the
-            # main poll would buy a stat() of every rotated file for every
-            # tick of a page nobody may even be looking at. It has its own
-            # endpoint, polled far more slowly by the panel that wants it.
-            "stream_fps": round(self.vision.stream_fps, 1) if self.vision else 0.0,
-            "detect_fps": round(self.vision.detect_fps, 1) if self.vision else 0.0,
-            "detect_enabled": self.vision.detect_enabled if self.vision else False,
-            "camera_enabled": bool(self.camera and self.camera.enabled),
-            # Boxes go out too so the page can work out which object was
-            # tapped without asking the robot to hit-test for it.
-            "objects": [
-                {**d.as_dict(), "box": list(d.box)} for d in world.detections
-            ],
-            "frame_size": list(world.frame_size),
-            "detector": self.detector.status() if self.detector else None,
-            "available": self.available,
-        }
+        return telemetry.describe(self)
 
     def close(self):
         self.running = False
