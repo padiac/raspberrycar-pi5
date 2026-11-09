@@ -118,6 +118,29 @@ TURN_CLEARANCE_CM = 16.0
 #: How long to back off for when there is not enough.
 MAKE_ROOM_S = 0.8
 
+#: Sliding sideways instead of backing out, when there is room beside.
+#
+# The car is 15cm wide and 28cm long, so the corner furthest from the centre
+# of rotation is 15.9cm away and turning on the spot needs that much room in
+# every direction. Moving sideways needs 7.5cm. Less than half -- and that
+# asymmetry is the entire reason for fitting mecanum wheels, which this
+# behaviour was not using at all.
+#
+# It also beats the alternative on its merits. Backing out retreats along
+# ground the car has already covered, which for a robot with no map is the
+# one move guaranteed to be wasted; a sidestep opens a lane it has not been
+# down. So reversing becomes the answer when there is nowhere to the side
+# either, rather than the first answer.
+SIDESTEP_SPEED = 0.45
+SIDESTEP_HOLD = 0.9
+#: Room needed beside the car before sliding into it: half the car, the
+#: usual margin, and enough beyond that for the step itself to land
+#: somewhere rather than ending with the car against whatever it measured.
+SIDESTEP_TRAVEL_CM = 14.0
+#: Only readings out towards the beam are about the side of the car. One at
+#: thirty degrees is mostly about what is in front of it.
+SIDESTEP_MIN_ANGLE = 55.0
+
 #: Being blocked this many times inside this window means the ways out are not
 #: working. The classic case is a corner: every direction that looks open is a
 #: soft surface that is not, so each escape leads straight back.
@@ -678,6 +701,11 @@ class PatrolBehavior(Behavior):
         # swing through, which is the one moment this is knowable.
         tightest = min(self.clearance.values(), default=999.0)
         if tightest < self._turn_clearance(robot):
+            # No room to swing the corners through. Sideways needs half as
+            # much and goes somewhere new, so it is tried first.
+            sideways = self._sidestep(robot, now, profile, "no room to turn")
+            if sideways is not None:
+                return sideways
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), MAKE_ROOM_S,
                 f"only {tightest:.0f}cm to turn in, backing off first | {profile}",
@@ -685,6 +713,9 @@ class PatrolBehavior(Behavior):
 
         roomiest = max(self.clearance.values(), default=0.0)
         if roomiest < BOXED_IN_CM:
+            sideways = self._sidestep(robot, now, profile, "boxed in")
+            if sideways is not None:
+                return sideways
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
                 f"boxed in ({roomiest:.0f}cm all round), backing out | {profile}",
@@ -717,6 +748,9 @@ class PatrolBehavior(Behavior):
             # its own width. Backing out is the only move left that does not
             # involve swinging a corner through an obstacle.
             self.last_choice = None
+            sideways = self._sidestep(robot, now, profile, "no gap wide enough")
+            if sideways is not None:
+                return sideways
             return self._commit(
                 robot, now, Velocity(vx=-REVERSE_SPEED), REVERSE_HOLD,
                 f"no gap wide enough -- {trace} | {profile}",
@@ -749,6 +783,41 @@ class PatrolBehavior(Behavior):
         )
 
     # -- what the chooser is given ----------------------------------------
+
+    def _sidestep(self, robot, now, profile, because):
+        """Slide to whichever side has room, or None if neither has.
+
+        Checked against the sweep rather than against the infrared, because
+        the infrared answers at eight centimetres and by then the car is
+        already alongside whatever it would have hit. The sweep has just
+        measured both sides from this exact spot, which is the one moment
+        the question is answerable.
+        """
+        need = self._radius(robot) + SIDESTEP_TRAVEL_CM
+        best = None
+        for angle, centimetres in self.clearance.items():
+            if abs(angle) < SIDESTEP_MIN_ANGLE:
+                continue
+            if angle in self.unknown:
+                # Silence off the beam is usually something soft standing
+                # right there, and sliding into it is how the car ends up
+                # scraping along a sofa. Not a direction to commit to blind.
+                continue
+            if centimetres < need:
+                continue
+            if best is None or centimetres > best[1]:
+                best = (angle, centimetres)
+
+        if best is None:
+            return None
+
+        angle, room = best
+        direction = 1.0 if angle > 0 else -1.0
+        side = "right" if direction > 0 else "left"
+        return self._commit(
+            robot, now, Velocity(vy=direction * SIDESTEP_SPEED), SIDESTEP_HOLD,
+            "%s -- sliding %s into %.0fcm | %s" % (because, side, room, profile),
+            follow=("decide", now))
 
     def _turn_clearance(self, robot):
         """Radius the corners sweep through when turning on the spot.
