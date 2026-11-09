@@ -1,5 +1,11 @@
 # RaspberryCar
 
+> Derived from [Mingrui-Yu/RaspberryCar](https://github.com/Mingrui-Yu/RaspberryCar)
+> (MIT, (c) 2020 Mingrui Yu), rebuilt for the Raspberry Pi 5. Published as its
+> own repository rather than a GitHub fork, so this note is the link back.
+> Everything below the line is the original README; the port is described
+> under **Fork notes**.
+
 An intelligent car based on Raspberry-Pi-3.
 
 （中文介绍请往后翻）
