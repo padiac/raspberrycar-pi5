@@ -17,7 +17,11 @@ def _parse_size(text):
     return int(width), int(height)
 
 
-class Camera:
+from .base import FrameSource, driver
+
+
+class Camera(FrameSource):
+    label = "IMX219 on the CSI ribbon"
     def __init__(self, size=None):
         from picamera2 import Picamera2
 
@@ -73,3 +77,8 @@ class Camera:
             self.picam.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+@driver("camera", "picamera2")
+def _camera(context):
+    return Camera()

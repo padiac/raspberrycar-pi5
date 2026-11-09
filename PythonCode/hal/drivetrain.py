@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from gpiozero import Motor
 
 from . import gpio  # noqa: F401 - selects the right gpiochip on import
+from .base import Device, driver
 
 
 def clamp(value, low=-1.0, high=1.0):
@@ -78,8 +79,10 @@ def _normalise(wheels):
     return [w / peak for w in wheels]
 
 
-class Drivetrain(ABC):
+class Drivetrain(Device, ABC):
     """A chassis. Takes a Velocity, drives the wheels."""
+
+    kind = "drivetrain"
 
     #: How many of (vx, vy, omega) this chassis can actually honour. The UI
     #: uses it to decide whether to offer strafe controls.
@@ -299,3 +302,11 @@ def build_drivetrain(kind=None):
             f"unknown drivetrain '{kind}', expected one of {sorted(DRIVETRAINS)}"
         ) from None
     return factory()
+
+
+@driver("drivetrain", "configured")
+def _drivetrain(context):
+    """Whatever CAR_DRIVETRAIN asks for. The chassis is chosen by the
+    environment rather than by what can be detected, because a mecanum
+    chassis and a differential one are the same four pins."""
+    return build_drivetrain()

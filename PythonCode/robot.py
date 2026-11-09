@@ -25,15 +25,10 @@ from preferences import Preferences
 from diagnostics.logbook import book
 from control import PathRecorder, SafetyLayer
 from control.turning import TurnTracker
+import hal
 from hal import Velocity, build_drivetrain
 from hal.drivetrain import DRIVETRAINS
-from hal.camera import Camera
 from hal.gamepad import Gamepad
-from hal.supply import Supply
-from hal.sensors import (
-    FloorArray, PanServo, ProximityArray, RangeFinder, SerialProximity,
-    SerialRangeFinder,
-)
 from perception.clip import ClipRecorder
 from perception.pipeline import VisionPipeline
 from perception.types import WorldState
@@ -89,37 +84,29 @@ class Robot:
         self.speed_limit = self.preferences.get("speed_limit")
         self.drivetrain = _optional("drivetrain", build_drivetrain)
 
-        # When an ESP32 is driving, the sensors wired to it come back over the
-        # same link rather than off this board's pins. Everything above still
-        # just sees a WorldState and cannot tell the difference.
+        # Which sensor is which piece of hardware is not decided here any
+        # more. When an ESP32 is driving, the sensors wired to it come back
+        # over the same link rather than off this board's pins -- and that
+        # used to be an `if` right here, with every downstream line written
+        # against whichever class came out of it. Now the drivers in hal
+        # say for themselves what they need, and this asks for a role.
+        #
+        # The practical difference: adding a time-of-flight array in place
+        # of the ultrasonic is a new file in hal and nothing at all in this
+        # one.
         self.link = getattr(self.drivetrain, "link", None)
+        context = hal.Context(link=self.link, calibration=self.calibration,
+                              preferences=self.preferences)
+        self.rangefinder = self._device(context, "range")
+        self.pan = self._device(context, "pan")
+        self.proximity = self._device(context, "proximity")
+        self.floor = self._device(context, "floor")
         if self.link is not None:
-            self.rangefinder = _optional(
-                "rangefinder (via ESP32)", lambda: SerialRangeFinder(self.link)
-            )
-            self.pan = _optional(
-                "pan servo",
-                lambda: PanServo(
-                    self.link,
-                    trim=self.calibration.get("pan_trim"),
-                    reversed_=bool(self.calibration.get("pan_reversed"))),
-            )
-            self.proximity = _optional(
-                "side infrared (via ESP32)",
-                lambda: SerialProximity(
-                    self.link, fitted=bool(self.calibration.get("ir_fitted"))),
-            )
-            self.floor = None
             self.link.on_reconnect = self._link_came_back
-        else:
-            self.pan = None
-            self.rangefinder = _optional("rangefinder", RangeFinder)
-            self.proximity = _optional("proximity", ProximityArray)
-            self.floor = _optional("floor sensors", FloorArray)
         self.detector = _optional(
             "detector", lambda: __import__("perception.detector", fromlist=["Detector"]).Detector()
         )
-        self.camera = _optional("camera", Camera)
+        self.camera = self._device(context, "camera")
 
         self.vision = (
             VisionPipeline(self.camera, self.detector) if self.camera else None
@@ -141,7 +128,7 @@ class Robot:
         )
         self.recorder = PathRecorder()
         # Costs no wiring: the Pi already measures the rail it runs on.
-        self.supply = _optional("supply monitor", Supply)
+        self.supply = self._device(context, "power")
 
         # A controller is not a behaviour, it is a driver -- so it goes in
         # through the same door as the on-screen pad and gets the same
@@ -242,6 +229,25 @@ class Robot:
             print("[prefs] object detection on, as last set", flush=True)
         if self.preferences.get("flight_recorder"):
             book.record(self.flight_row)
+
+    def _device(self, context, kind):
+        """Build the best available device of a kind, saying what happened.
+
+        Absent hardware is ordinary here -- no camera ribbon, no board
+        plugged in, a library nobody installed -- so this reports and
+        carries on rather than raising. What it must not do is fail
+        silently: a car that comes up with no rangefinder and says nothing
+        looks exactly like a car whose rangefinder is lying.
+        """
+        def grumble(name, exc):
+            print(f"[hw] {kind} driver {name}: {exc}", flush=True)
+
+        device = hal.build(kind, context, on_error=grumble)
+        if device is None:
+            print(f"[hw] {kind}: none available", flush=True)
+        else:
+            print(f"[hw] {kind}: {device.label}", flush=True)
+        return device
 
     # -- capabilities -------------------------------------------------------
 
@@ -959,7 +965,12 @@ class Robot:
                 {"fitted": self.proximity.fitted,
                  "reporting": self.proximity.reporting,
                  "pins": self.link.telemetry.proximity}
-                if isinstance(self.proximity, SerialProximity) else None
+                # Asked of the contract, not of one implementation: any
+                # proximity sensor says whether it is fitted and whether it
+                # is reporting, and the raw pins only exist when a board is
+                # sending them.
+                if self.proximity is not None and self.link is not None
+                else None
             ),
             "floor": world.floor.as_dict() if world.floor else None,
             # The serial link itself, which was never reported. Its counters

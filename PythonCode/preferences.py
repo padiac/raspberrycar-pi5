@@ -71,6 +71,11 @@ DEFAULTS = {
     #: three quarters, with the preview dipping while it ramps and settling
     #: back near 30. No thermal throttling at either.
     "detect_fps": 10.0,
+    #: Whether downward line sensors are wired to the Pi. Off by default
+    #: for the reason the infrared is: an unconnected input sits at its
+    #: pull-up and reads exactly like a clear floor, so a sensor nobody has
+    #: confirmed exists must not be allowed to vote.
+    "floor_fitted": False,
     #: Whether the flight recorder starts with the car.
     "flight_recorder": False,
 }

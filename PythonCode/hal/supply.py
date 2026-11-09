@@ -46,7 +46,11 @@ def _vcgencmd(*args):
     ).stdout.strip()
 
 
-class Supply:
+from .base import PowerMonitor, driver
+
+
+class Supply(PowerMonitor):
+    label = "Pi supply voltage"
     """Polls the PMIC on its own thread and remembers the worst of it."""
 
     def __init__(self):
@@ -109,3 +113,8 @@ class Supply:
             "now": sorted(n for b, n in FLAGS.items() if self.throttled & (1 << b)),
             "ever": sorted(self.seen),
         }
+
+
+@driver("power", "vcgencmd")
+def _supply(context):
+    return Supply()

@@ -5,6 +5,10 @@ boolean with a documented meaning, so nothing above has to remember that these
 particular sensors pull their output *low* when they see something.
 """
 
+from .base import (
+    Context, FloorSensor, PanMount, ProximitySensor, RangeSensor, driver,
+)
+
 import time
 from dataclasses import dataclass
 
@@ -39,8 +43,10 @@ class Floor:
         return {"left": self.left, "right": self.right}
 
 
-class RangeFinder:
+class RangeFinder(RangeSensor):
     """HC-SR04 ultrasonic, reported in centimetres."""
+
+    label = "ultrasonic on the Pi"
 
     # BCM pins, inherited from upstream.
     TRIGGER = 20
@@ -88,7 +94,7 @@ class RangeFinder:
 DEAF_AFTER_S = 8.0
 
 
-class SerialRangeFinder:
+class SerialRangeFinder(RangeSensor):
     """Distance as reported by the ESP32.
 
     The measurement itself happens over there because it is a microsecond
@@ -96,6 +102,8 @@ class SerialRangeFinder:
     hiccup of a millisecond turns into 17cm of error. All this does is read the
     number off the link.
     """
+
+    label = "ultrasonic via ESP32"
 
     def __init__(self, link):
         self.link = link
@@ -187,7 +195,7 @@ SETTLE_MIN_S = 0.15
 FORWARD_TOLERANCE_DEG = 12
 
 
-class PanServo:
+class PanServo(PanMount):
     """Where the ultrasonic is pointing.
 
     The car has one distance sensor and it is on a servo, so "how far is the
@@ -201,6 +209,8 @@ class PanServo:
     the same sense as vy and omega. The servo's own numbering is an
     implementation detail and stays inside this class.
     """
+
+    label = "pan servo via ESP32"
 
     def __init__(self, link, trim=0.0, reversed_=False):
         self.link = link
@@ -312,7 +322,7 @@ class PanServo:
         }
 
 
-class SerialProximity:
+class SerialProximity(ProximitySensor):
     """The side infrared, as reported by the ESP32.
 
     Reads nothing itself: the pins are on the other board, for the same reason
@@ -325,6 +335,8 @@ class SerialProximity:
     pull-up, does not read as a clear road to the safety layer. Turn it on once
     the readings can be seen changing.
     """
+
+    label = "corner infrared via ESP32"
 
     def __init__(self, link, fitted=False):
         self.link = link
@@ -344,8 +356,10 @@ class SerialProximity:
         return Proximity(left=pair[0], right=pair[1])
 
 
-class ProximityArray:
+class ProximityArray(ProximitySensor):
     """The two side-facing infrared obstacle sensors."""
+
+    label = "proximity on the Pi"
 
     # BCM pins, inherited from upstream.
     LEFT = 7
@@ -362,7 +376,7 @@ class ProximityArray:
         return Proximity(left=not self.left.value, right=not self.right.value)
 
 
-class FloorArray:
+class FloorArray(FloorSensor):
     """The downward-facing line-tracking sensors.
 
     Only two of these are wired, which is one short of being useful: two
@@ -370,6 +384,8 @@ class FloorArray:
     so a controller can only swing hard one way or the other. Three or more
     give a proportional error worth feeding to a PID.
     """
+
+    label = "floor sensors on the Pi"
 
     # BCM pins, inherited from upstream.
     LEFT = 16
@@ -382,3 +398,48 @@ class FloorArray:
     def read(self):
         # 1 means dark on these modules.
         return Floor(left=bool(self.left.value), right=bool(self.right.value))
+
+
+# -- drivers ---------------------------------------------------------------
+#
+# Which of these gets built is now data rather than a branch in the robot.
+# The ones on the microcontroller win on priority because that is where this
+# car actually puts its sensors; the Pi-side ones remain for a chassis wired
+# the other way, and are what a third implementation would sit beside.
+
+
+@driver("range", "esp32", priority=10, needs_link=True)
+def _range_over_serial(context):
+    return SerialRangeFinder(context.link)
+
+
+@driver("range", "gpio")
+def _range_on_pins(context):
+    return RangeFinder()
+
+
+@driver("pan", "esp32", priority=10, needs_link=True)
+def _pan_over_serial(context):
+    return PanServo(
+        context.link,
+        trim=context.measured("pan_trim", 0.0),
+        reversed_=bool(context.measured("pan_reversed", False)),
+    )
+
+
+@driver("proximity", "esp32", priority=10, needs_link=True)
+def _proximity_over_serial(context):
+    return SerialProximity(
+        context.link, fitted=bool(context.measured("ir_fitted", False)))
+
+
+@driver("proximity", "gpio")
+def _proximity_on_pins(context):
+    return ProximityArray()
+
+
+@driver("floor", "gpio")
+def _floor_on_pins(context):
+    if not context.chosen("floor_fitted", False):
+        return None
+    return FloorArray()
