@@ -316,18 +316,54 @@ class Logbook:
                      else FLIGHT_IDLE_KEEPALIVE_S)
         return now - self._flight_wrote >= keepalive
 
+    def _columns_on_disk(self, handler):
+        """The column names the file already has, or None if it has none.
+
+        Read from the file rather than remembered, because the file may
+        have been written by an earlier run of this program with a
+        different set of columns, and that run is exactly the case this
+        is here to catch.
+        """
+        try:
+            name = handler.baseFilename
+            if os.path.getsize(name) == 0:
+                return None
+            with open(name, "r") as existing:
+                first = existing.readline().strip()
+            return first.split(",") if first else None
+        except Exception:       # noqa: BLE001 - logging is never fatal
+            return None
+
     def _write_row(self, row):
         handler = self._flight_handler
         if handler is None:
             return
-        if self._flight_fields is None:
-            self._flight_fields = ["time"] + sorted(row)
-            try:
-                fresh = handler.stream.tell() == 0
-            except Exception:   # noqa: BLE001
-                fresh = False
-            if fresh:
-                handler.put(",".join(self._flight_fields) + "\n")
+
+        # Every row, not just the first. The source dict changes shape when
+        # a device fails to start or a new field is added, and a shape
+        # change halfway down a file is the same lie as one at the top.
+        fields = ["time"] + sorted(row)
+        if self._flight_fields != fields:
+            existing = self._columns_on_disk(handler)
+            if existing is None:
+                handler.put(",".join(fields) + "\n")
+            elif existing != fields:
+                # A file may only ever contain one shape. Roll, so that the
+                # rows already written keep the header that describes them.
+                handler.doRollover()
+                difference = sorted(set(fields) ^ set(existing))
+                print("[log] flight recorder columns changed (%s); "
+                      "started a new file so the old one stays readable"
+                      % (", ".join(difference) or "same names, new order"),
+                      flush=True)
+                handler.put(",".join(fields) + "\n")
+            # else: the file on disk already describes these columns, so
+            # append under it. Not rolling here is the point -- restarting
+            # the service five times in an afternoon is ordinary, and
+            # rolling each time would push the real history off the end of
+            # the backups.
+            self._flight_fields = fields
+
         buffer = io.StringIO()
         writer = csv.writer(buffer, lineterminator="\n")
         stamp = "%s.%03d" % (time.strftime("%H:%M:%S"), (time.time() % 1) * 1000)

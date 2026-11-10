@@ -233,6 +233,75 @@ time.sleep(1.2)
 book2.stop_recording()
 check("an unchanging robot writes only a heartbeat", book2._flight_rows <= 4)
 
+
+section("a flight recording says what its own columns are")
+
+# Found while using the recorder to diagnose something else, which is the
+# worst way to learn that a debugging tool is lying. One file held a
+# 17-column header over rows of 17, 18 and 19 columns, because the column
+# names were taken from the first row each *process* happened to see and
+# the header was written only when the file was empty. Read with the
+# header it carries, the wider rows are shifted, so a value lands under
+# its neighbour's name. What gave it away was a velocity of -308 in a
+# field whose range is minus one to one; a smaller discrepancy would have
+# been believed.
+
+
+def column_widths(name):
+    with open(name, encoding="utf-8") as handle:
+        rows = [line for line in handle.read().splitlines() if line]
+    return rows[0].split(","), {len(r.split(",")) for r in rows[1:]}
+
+
+def run_recorder(where, keys, ticks=6):
+    """One run of the program, writing rows with a given set of fields."""
+    book = Logbook(where)
+    counter = {"n": 0}
+
+    def source():
+        counter["n"] += 1
+        return {k: counter["n"] + i for i, k in enumerate(keys)}
+
+    book.record(source)
+    time.sleep(0.25 * ticks / 3.0)
+    book.stop_recording()
+    return book
+
+
+drifting = "/tmp/car_logs_columns"
+os.system("rm -rf " + drifting)
+
+run_recorder(drifting, ("alpha", "beta"))
+run_recorder(drifting, ("alpha", "beta"))          # same shape: must not roll
+current = os.path.join(drifting, "flight.csv")
+header, widths = column_widths(current)
+check("two runs of the same shape share one file",
+      not os.path.exists(current + ".1"))
+check("and every row in it matches the header",
+      widths in ({len(header)}, set()))
+
+run_recorder(drifting, ("alpha", "beta", "gamma"))  # a field appeared
+header, widths = column_widths(current)
+check("a run with a new column starts a new file",
+      os.path.exists(current + ".1"))
+check("whose header mentions the new column", "gamma" in header)
+check("and whose rows all match that header",
+      widths in ({len(header)}, set()))
+
+old_header, old_widths = column_widths(current + ".1")
+check("while the rows written before it keep the header that describes them",
+      "gamma" not in old_header and old_widths in ({len(old_header)}, set()))
+
+# The case that cost the afternoon: reading the file back with its own
+# header must not silently shift anything.
+import csv as _csv                                            # noqa: E402
+
+with open(current, encoding="utf-8") as handle:
+    parsed = list(_csv.DictReader(handle))
+check("read back by name, nothing lands in the wrong column",
+      all(row.get(None) is None and None not in row.values()
+          for row in parsed))
+
 status = book.status()
 check("status reports a ceiling", status["ceiling"] > 0)
 check("and what is used", status["bytes"] > 0)
