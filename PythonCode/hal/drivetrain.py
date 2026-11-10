@@ -237,12 +237,12 @@ class SerialDrivetrain(Drivetrain):
     label = "mecanum via ESP32"
     wheel_names = ("front_left", "front_right", "rear_left", "rear_right")
 
-    def __init__(self, link=None):
+    def __init__(self, link=None, heading_reversed=False):
         super().__init__()
         if link is None:
             from .link import SerialLink
 
-            link = SerialLink()
+            link = SerialLink(heading_reversed=heading_reversed)
         self.link = link
 
     def wheel_speeds(self, v):
@@ -291,7 +291,13 @@ DRIVETRAINS = {
 }
 
 
-def build_drivetrain(kind=None):
+def build_drivetrain(kind=None, calibration=None):
+    """The chassis this car has, with the facts measured about it.
+
+    Takes the calibration rather than a Context, because the drivetrain is
+    the one device built before a Context can exist: the Context holds the
+    link, and the link belongs to the drivetrain.
+    """
     import os
 
     kind = kind or os.environ.get("CAR_DRIVETRAIN", "differential")
@@ -301,7 +307,16 @@ def build_drivetrain(kind=None):
         raise ValueError(
             f"unknown drivetrain '{kind}', expected one of {sorted(DRIVETRAINS)}"
         ) from None
-    return factory()
+
+    reversed_heading = bool(
+        calibration.get("heading_reversed", False) if calibration else False)
+    try:
+        return factory(heading_reversed=reversed_heading)
+    except TypeError:
+        # A chassis with no board to have a gyro on. Not every drivetrain
+        # has an opinion about headings, and the ones that do not should
+        # not have to grow a parameter to say so.
+        return factory()
 
 
 @driver("drivetrain", "configured")

@@ -115,6 +115,43 @@ check("wheels parsed", tel.wheels, (1.0, 0.333, 0.333, 1.0))
 check("stopped flag parsed", tel.stopped, False)
 check("marked fresh", tel.fresh, True)
 
+# Which way round the gyro counts.
+#
+# The owner settled this by driving the car and watching the number at the
+# same time: turning the car clockwise made the heading go down, while the
+# control that did it was the one that means "right". So the wheels are
+# right and the gyro is backwards, on this car, because of how the board
+# happens to be mounted.
+#
+# It matters far more than it sounds. Three of the four things that read a
+# heading only ever take its absolute value, so they never noticed. The
+# fourth steers on it, and with the sign crossed that became positive
+# feedback: the car turned itself most of the way round while the ball it
+# was looking for sat in the middle of the picture.
+#
+# The flag belongs to the car, so both cases are checked rather than one.
+spun = "T,23.4,0,0,0,0,0,0,0,1,42.5,0"
+link, port = build_link()
+link._handle(f"${spun}*{checksum(spun):02X}")
+check("a heading comes through as sent on a car wired the usual way",
+      link.telemetry.heading, 42.5)
+
+link, port = build_link()
+link.heading_reversed = True
+link._handle(f"${spun}*{checksum(spun):02X}")
+check("and the other way round on a car whose gyro counts backwards",
+      link.telemetry.heading, -42.5)
+
+# The board says separately whether it has a heading at all. Reversing
+# must not turn "I have no heading" into a number, which is the same
+# mistake as a timed-out ping becoming a distance.
+silent = "T,23.4,0,0,0,0,0,0,0,0,0.0,0"
+link, port = build_link()
+link.heading_reversed = True
+link._handle(f"${silent}*{checksum(silent):02X}")
+check("a board with no heading to give still reports none, not minus zero",
+      link.telemetry.heading, None)
+
 # -1 means the pulse timed out with nothing inside about 4m. That is a
 # measurement, and it says the road is clear -- so it is carried through as it
 # stands rather than folded into None.

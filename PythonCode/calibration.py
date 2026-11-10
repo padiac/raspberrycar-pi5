@@ -30,6 +30,16 @@ DEFAULTS = {
     #: Whether the head turns the opposite way to the commanded sign. Depends
     #: on how the servo linkage was assembled, so it cannot be assumed.
     "pan_reversed": False,
+    #: True when the board's heading counts the opposite way round to the
+    #: drivetrain, so that turning right makes it go down. Found the hard
+    #: way: the search steers on this, and with the sign crossed it became
+    #: positive feedback and turned the car most of the way round while
+    #: the ball it was looking for was dead centre in the picture.
+    #:
+    #: Which way up an accelerometer ended up on the chassis is exactly
+    #: the sort of thing that differs between two cars built from the same
+    #: parts, which is why it is a measurement and not a constant.
+    "heading_reversed": False,
     #: The nearest thing each pan angle can see when the room is empty, keyed
     #: by angle as a string. Not a setting: it is a measurement of what parts
     #: of this car are in the sensor's way, which depends entirely on where

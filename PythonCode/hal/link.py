@@ -119,8 +119,20 @@ class Telemetry:
 class SerialLink:
     """Talks to the ESP32. Reconnects on its own if the cable is pulled."""
 
-    def __init__(self, port=None, baud=BAUD):
+    #: Default here as well as in __init__, because the test harness
+    #: builds one without running __init__ to avoid starting threads
+    #: against a device that is not there.
+    heading_reversed = False
+
+    def __init__(self, port=None, baud=BAUD, heading_reversed=False):
         import serial  # pyserial
+
+        #: Whether this car's gyro counts the opposite way to its wheels;
+        #: see calibration.py. Applied here, at the one place a heading
+        #: enters the program, rather than by each of the four things that
+        #: read one -- three of which only ever take its absolute value
+        #: and so would never have noticed it was wrong.
+        self.heading_reversed = bool(heading_reversed)
 
         self._serial_mod = serial
         self._opened_at = 0.0
@@ -368,7 +380,13 @@ class SerialLink:
             if len(parts) >= 9:
                 tel.proximity = (parts[7] == "1", parts[8] == "1")
             if len(parts) >= 12:
-                tel.heading = float(parts[10]) if parts[9] == "1" else None
+                if parts[9] == "1":
+                    raw = float(parts[10])
+                    tel.heading = -raw if self.heading_reversed else raw
+                else:
+                    # Not a zero: the board is saying it has no heading to
+                    # give, which is a different thing from not turning.
+                    tel.heading = None
                 tel.bumped = parts[11] == "1"
             tel.updated = time.monotonic()
         elif parts[0] == "!":

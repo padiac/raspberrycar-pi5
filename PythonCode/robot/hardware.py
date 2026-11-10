@@ -40,7 +40,8 @@ class Hardware:
 
     def __init__(self, calibration, settings, announce=print):
         self.announce = announce
-        self.drivetrain = self._try("drivetrain", build_drivetrain)
+        self.drivetrain = self._try(
+            "drivetrain", lambda: build_drivetrain(calibration=calibration))
 
         #: The serial link, if the chassis came with one. Sensors wired to
         #: that board report over it rather than off this one's pins, which
