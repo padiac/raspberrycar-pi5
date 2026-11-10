@@ -154,3 +154,18 @@ python3 tools/undefined.py PythonCode
 After anything structural, restart the service and read the startup log:
 it names the driver that filled each role, and that is the quickest proof
 that the car still assembles.
+
+```bash
+sudo systemctl restart raspberrycar.service && sleep 15
+sudo journalctl -u raspberrycar.service -n 60 --no-pager | grep '\[hw\]'
+```
+
+**Read the roles, not the word "Traceback".** Absent hardware is ordinary
+and is handled, so a driver that fails to build prints a sentence and the
+car carries on -- which is the right behaviour and means there is no stack
+to grep for. A one-argument mistake in reading the calibration once took
+the drivetrain out, and with it the serial link and every device on the
+far end of it; the log said `[hw] drivetrain: unavailable (...)` on the
+line above `[hw] range: ultrasonic on the Pi`, and a check that looked
+only for tracebacks found nothing wrong. From the page it appeared as a
+Control panel where nothing could be selected.

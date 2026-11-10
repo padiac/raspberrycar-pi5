@@ -308,15 +308,36 @@ def build_drivetrain(kind=None, calibration=None):
             f"unknown drivetrain '{kind}', expected one of {sorted(DRIVETRAINS)}"
         ) from None
 
+    # `Calibration.get` takes a key and nothing else: it already falls
+    # back to the declared default, which is the reason it exists.
     reversed_heading = bool(
-        calibration.get("heading_reversed", False) if calibration else False)
-    try:
+        calibration.get("heading_reversed") if calibration else False)
+
+    # Ask whether this chassis has an opinion about headings, rather than
+    # calling it and catching TypeError. A chassis with no board to have a
+    # gyro on should not have to grow a parameter to say so -- but a
+    # TypeError from somewhere inside a factory that *does* take the
+    # argument would be swallowed the same way, and the next person would
+    # spend their evening looking at the wrong module.
+    if _accepts(factory, "heading_reversed"):
         return factory(heading_reversed=reversed_heading)
-    except TypeError:
-        # A chassis with no board to have a gyro on. Not every drivetrain
-        # has an opinion about headings, and the ones that do not should
-        # not have to grow a parameter to say so.
-        return factory()
+    return factory()
+
+
+def _accepts(factory, name):
+    """Does this callable take a keyword argument called `name`?"""
+    import inspect
+
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):     # a builtin, or something exotic
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == name:
+            return True
+    return False
 
 
 @driver("drivetrain", "configured")
