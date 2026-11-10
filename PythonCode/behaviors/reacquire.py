@@ -90,6 +90,29 @@ HUNT = group(
         0.30, unit="", bounds=(0.05, 1.0),
         help="How fast to sweep when there is no gyro to close the loop "
              "with, so the car cannot tell how far it has turned."),
+    divergence_ticks=Spec(
+        6, bounds=(2, 100),
+        help="How many ticks in a row the car may get further from where "
+             "it is trying to look before the loop is declared broken and "
+             "abandoned. Catches the heading and the wheels disagreeing "
+             "about which way is positive, which otherwise turns this "
+             "into positive feedback and spins the car."),
+    runaway_factor=Spec(
+        1.5, unit="x", bounds=(1.0, 6.0),
+        help="Hard ceiling on how far from where the target was last seen "
+             "the search may take the car, as a multiple of the sweep. "
+             "Reaching it ends the search however well it seemed to be "
+             "going."),
+)
+
+
+#: Every name in HUNT, which is also every keyword the constructor takes.
+#: Declared rather than derived: a Group forwards attribute access to the
+#: register, so asking one what it holds returns a setting called "names".
+SETTINGS = (
+    "enabled", "patience_s", "sweep_degrees", "dwell_s", "opening_rate",
+    "sweep_period_s", "effort", "gain", "blind_rate", "divergence_ticks",
+    "runaway_factor",
 )
 
 
@@ -102,20 +125,18 @@ class Reacquire:
     is doing something nobody asked for.
     """
 
-    def __init__(self, patience_s=None, sweep_degrees=None, dwell_s=None,
-                 opening_rate=None, sweep_period_s=None, effort=None,
-                 gain=None, blind_rate=None, enabled=None):
-        #: None means "read the register", so the car follows the settings
-        #: page while a test can pin every number it depends on. A test
-        #: that moved the register would change what the car does on its
-        #: next tick, which is the one thing the conventions forbid here.
-        self._settings = {
-            "patience_s": patience_s, "sweep_degrees": sweep_degrees,
-            "dwell_s": dwell_s,
-            "opening_rate": opening_rate, "sweep_period_s": sweep_period_s,
-            "effort": effort, "gain": gain, "blind_rate": blind_rate,
-            "enabled": enabled,
-        }
+    def __init__(self, **overrides):
+        #: Anything not given here is read from the register, so the car
+        #: follows the settings page while a test can pin every number it
+        #: depends on. A test that moved the register would change what
+        #: the car does on its next tick, which is the one thing the
+        #: conventions forbid here.
+        unknown = sorted(set(overrides) - set(SETTINGS))
+        if unknown:
+            raise TypeError(
+                "no such search setting: %s (have: %s)"
+                % (", ".join(unknown), ", ".join(SETTINGS)))
+        self._settings = dict(overrides)
         self.searching = False
         self.anchor = 0.0           # heading when the target was last seen
         self.side = 1.0             # which way it went: +1 right, -1 left
@@ -127,10 +148,24 @@ class Reacquire:
         #: `searching` alone, because giving up clears that too, and the
         #: two cases want different words on the page.
         self.gave_up = False
+        #: Why the closed loop was abandoned, if it was. Kept rather than
+        #: just acted on, because "the search was poor" and "the gyro and
+        #: the wheels disagree about which way is positive" want very
+        #: different things done about them, and only one of them is
+        #: visible from the outside.
+        self.broke = None
+        #: Last (heading, command), for checking that the car moves the
+        #: way it is told to.
+        self._was = None
+        self._contradictions = 0
 
     def _get(self, name):
         chosen = self._settings.get(name)
         return getattr(HUNT, name) if chosen is None else chosen
+
+    @staticmethod
+    def settings():
+        return SETTINGS
 
     # -- what the behaviour tells it ---------------------------------------
 
@@ -146,6 +181,9 @@ class Reacquire:
             return
         self.searching = True
         self.gave_up = False
+        self.broke = None
+        self._was = None
+        self._contradictions = 0
         self.elapsed = 0.0
         self.anchor = turned if turned is not None else 0.0
         self.blind = not have_gyro
@@ -180,6 +218,19 @@ class Reacquire:
 
         effort = self._get("effort")
 
+        # Never more than this far from where the target was last seen,
+        # whatever the loop thinks it is doing. The aim was always clamped
+        # to the sweep; the response to the aim was not, which is the gap
+        # a crossed sign drove a car through.
+        if turned is not None and not self.blind:
+            ceiling = (self._get("sweep_degrees")
+                       * self._get("runaway_factor"))
+            if abs(turned - self.anchor) > ceiling:
+                self.searching = False
+                self.gave_up = True
+                self.broke = self.broke or "went too far round"
+                return None
+
         if self.blind or turned is None:
             # No gyro: there is no way to know how far the car has turned,
             # so there is nothing to close a loop around. Sweep open-loop,
@@ -207,13 +258,49 @@ class Reacquire:
         self.aim = self.anchor + self.side * amplitude * swing
 
         error = self.aim - turned
-        omega = self._get("gain") * error
-        return max(-effort, min(effort, omega))
+        omega = max(-effort, min(effort, self._get("gain") * error))
+
+        # Does the car move the way it is told to?
+        #
+        # Nothing here involves the aim, deliberately. The aim is a sweep:
+        # it oscillates, the car lags behind it, and the distance to it
+        # grows for a stretch every time it turns round -- so judging the
+        # loop by whether that distance is shrinking condemns every honest
+        # search. The command against the gyro is the comparison that found
+        # this fault in the flight recorder, and it is true or false on its
+        # own terms.
+        #
+        # Both thresholds exist to ignore the ticks that say nothing: a
+        # command too small to move the car, and a heading change too small
+        # to be more than gyro noise.
+        if self._was is not None:
+            previous_turned, previous_command = self._was
+            moved = turned - previous_turned
+            if abs(previous_command) > 0.05 and abs(moved) > 0.1:
+                if (moved > 0) != (previous_command > 0):
+                    self._contradictions += 1
+                else:
+                    self._contradictions = 0
+        self._was = (turned, omega)
+
+        if self._contradictions >= self._get("divergence_ticks"):
+            # Not fatal, and not silent. The open-loop sweep is a worse
+            # search and a bounded one.
+            self.blind = True
+            self.broke = ("heading and wheels disagree about which way "
+                          "is positive; sweeping open-loop instead")
+            print("[search] %s" % self.broke, flush=True)
+            return 0.0
+
+        return omega
 
     def describe(self, label):
         if not self.searching:
             return f"lost the {label}"
         if self.blind:
+            if self.broke:
+                return ("looking for the %s, open-loop: %s (%.1fs)"
+                        % (label, self.broke, self.elapsed))
             return ("looking for the %s, no gyro (%.1fs)"
                     % (label, self.elapsed))
         spread = abs(self.aim - self.anchor)
@@ -233,4 +320,5 @@ class Reacquire:
             "anchor": round(self.anchor, 1),
             "aim": round(self.aim, 1),
             "blind": self.blind,
+            "broke": self.broke,
         }

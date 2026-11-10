@@ -17,7 +17,8 @@ FAILURES = []
 #: which on this machine is also what the car is using to drive.
 TUNING = dict(enabled=True, patience_s=6.0, sweep_degrees=70.0,
               dwell_s=0.4, opening_rate=45.0, sweep_period_s=2.4,
-              effort=0.45, gain=0.02, blind_rate=0.30)
+              effort=0.45, gain=0.02, blind_rate=0.30,
+              divergence_ticks=6, runaway_factor=1.5)
 
 
 def check(name, got, want):
@@ -38,6 +39,10 @@ def sign(name, value, want):
 
 def truthy(name, value):
     check(name, bool(value), True)
+
+
+def falsy(name, value):
+    check(name, bool(value), False)
 
 
 def hunt(**over):
@@ -201,11 +206,98 @@ truthy("and the sweep does come back the other way",
 
 
 print()
+print("wired up backwards, which is how this was found")
+
+# Reported from the room: the ball was dead centre and the car turned
+# itself most of the way round. The flight recorder had it -- one follow
+# run swept 353 degrees -- and the cause: over every tick where a turn was
+# commanded and the heading moved, the two agreed 15 times and disagreed
+# 177. The gyro counts the opposite way to the wheels, so steering towards
+# the aim takes the car away from it, and turning harder makes it worse.
+#
+# The sign itself is fixed elsewhere once it has been measured on the car.
+# What is checked here is that getting it wrong again costs a poor search
+# rather than a pirouette, because a closed loop that cannot tell it is
+# diverging is not a closed loop.
+#: Degrees of real rotation per unit of commanded turn per tick. This car
+#: at full effort turns at something like eighty degrees a second, which
+#: over a 0.05s tick is four degrees; the 0.45 effort cap makes nine the
+#: right figure here. It matters because the guard needs a few ticks to
+#: be sure, and how far the car gets in those ticks is the whole question.
+DEGREES_PER_COMMAND = 9.0
+
+
+def spin(search, backwards, ticks=200):
+    """Drive the search against a car, correctly or incorrectly wired.
+
+    Returns how far it got, and what it was saying at the moment it
+    noticed something was wrong -- which has to be captured as it happens,
+    because by the time the search has finished it is saying it gave up,
+    and that is a different and less useful sentence.
+    """
+    heading = 0.0
+    worst = 0.0
+    said = None
+    for _ in range(ticks):
+        command = search.steer(turned=heading, dt=0.05)
+        if search.blind and said is None:
+            said = search.describe("ball")
+        if command is None:
+            return worst, said
+        heading += command * DEGREES_PER_COMMAND * (-1.0 if backwards else 1.0)
+        worst = max(worst, abs(heading - search.anchor))
+    return worst, said
+
+
+backwards = hunt()
+backwards.lost(last_offset=+0.9, last_drift=0.0, turned=0.0)
+worst, said = spin(backwards, backwards=True)
+truthy("a backwards gyro does not send the car round and round (%.0f deg)"
+       % worst,
+       worst < TUNING["sweep_degrees"] * TUNING["runaway_factor"])
+truthy("  the loop works out that it is diverging", backwards.blind)
+truthy("  and says which of the two things is wrong",
+       "which way is positive" in (backwards.broke or ""))
+truthy("  in words the page can show, at the moment it notices",
+       "open-loop" in (said or ""))
+
+# And the backstop, for anything the divergence test does not catch: a
+# hard ceiling on how far round the search may take the car at all.
+runaway = hunt(divergence_ticks=99)
+runaway.lost(last_offset=+0.9, last_drift=0.0, turned=0.0)
+far = None
+for _ in range(200):
+    far = runaway.steer(turned=200.0, dt=0.05)
+    if far is None:
+        break
+check("and a hard ceiling stops it however well it thought it was doing",
+      far, None)
+# Worth being exact about what that buys, because it is not "the car never
+# goes further than the ceiling". The search stops commanding once the car
+# is past it; how far the car carries on afterwards belongs to the car. A
+# faster chassis than this one would overshoot more, and the only thing
+# that makes the number small is noticing early.
+truthy("  recorded as having gone too far rather than as a clean finish",
+       "too far" in (runaway.broke or ""))
+
+# The guard must not fire on an honest search. The sweep opens faster than
+# the car follows it, so the distance to the aim grows routinely; reading
+# that as divergence would disable the good loop on every single search.
+honest = hunt()
+honest.lost(last_offset=+0.9, last_drift=0.0, turned=0.0)
+spin(honest, backwards=False)
+falsy("an honest search is not mistaken for a broken one", honest.blind)
+check("  and nothing is reported as broken", honest.broke, None)
+
+
+print()
 print("staying inside its limits")
 
 hard = hunt(gain=5.0, effort=0.4)
 hard.lost(last_offset=0.9, last_drift=0.0, turned=0.0)
-worst = max(abs(hard.steer(turned=-500.0, dt=0.05)) for _ in range(10))
+# Inside the runaway ceiling, so that what is being checked is the
+# effort clamp and not the ceiling that would stop it anyway.
+worst = max(abs(hard.steer(turned=-60.0, dt=0.05) or 0.0) for _ in range(10))
 truthy("a target a long way round does not produce a bigger command "
        "than the effort allows", worst <= 0.4 + 1e-9)
 
