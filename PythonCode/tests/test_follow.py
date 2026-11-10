@@ -203,6 +203,32 @@ check("  and not remembered as a stale guess", gone.track.offset, None)
 
 
 print()
+print("the knobs on the page reach the loop")
+
+# Half of these used to be read once at construction, so dragging the
+# slider did nothing and the comment promising live tuning was true of
+# whichever ones somebody happened to try first.
+#
+# The value is not asserted -- that would be a test depending on the live
+# register, which on this machine is also what the car is driving on --
+# only that the loop follows it rather than a copy taken at birth.
+from behaviors.follow import CHASE                              # noqa: E402
+
+knobs = follower()
+check("the standoff follows the settings page",
+      knobs.standoff_cm, CHASE.standoff_cm)
+
+knobs.configure(standoff_cm=77.0)
+check("  unless somebody pins it for this run", knobs.standoff_cm, 77.0)
+
+knobs.update(FakeRobot(), world(offset=0.0, range_cm=STANDOFF_CM))
+check("  and the distance controller aims at whichever is in force",
+      knobs.distance_pid.setpoint, 77.0)
+check("  as does the apparent-size fallback",
+      knobs.forward_pid.setpoint, CHASE.target_fill)
+
+
+print()
 print("the car turned away from it, so the car knows where to look")
 
 # Reported from the room: the ball was in view, the car turned, the ball
@@ -261,6 +287,8 @@ for _ in range(400):
     out = hunting.update(FakeRobot(), nothing_at(turned=120.0))
 check("  and eventually gives up instead of turning for ever",
       (out.vx, out.omega), (0.0, 0.0))
+check("  saying it lost the thing, not that it never saw one",
+      hunting.status()["state"], "lost the bottle")
 
 print()
 if FAILURES:

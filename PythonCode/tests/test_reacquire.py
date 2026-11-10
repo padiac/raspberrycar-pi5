@@ -152,6 +152,21 @@ while patient.steer(turned=0.0, dt=0.05) is not None:
 truthy("it gives up after about the time it was given",
        18 <= steps <= 22)
 check("and stops claiming to be searching", patient.status()["searching"], False)
+# ...but it has to stay tellable from a search that never started, because
+# "point me at something" and "it went somewhere I could not find" are
+# different messages for the person reading the page, and `searching` is
+# False in both cases.
+check("  while still being distinguishable from never having looked",
+      patient.status()["gave_up"], True)
+check("  which a search that was never started is not",
+      hunt().status()["gave_up"], False)
+
+again = hunt(patience_s=1.0)
+again.lost(last_offset=0.5, last_drift=0.0, turned=0.0)
+while again.steer(turned=0.0, dt=0.05) is not None:
+    pass
+again.found()
+check("  and finding it afterwards clears that", again.status()["gave_up"], False)
 check("which reads as having lost it, not as never having seen it",
       patient.describe("ball"), "lost the ball")
 

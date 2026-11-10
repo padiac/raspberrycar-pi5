@@ -190,7 +190,11 @@ class FollowBehavior(Behavior):
     def __init__(self, target="person"):
         self.target = target
         self.orbit = 0.0            # -1 .. 1, sideways circling (mecanum only)
-        self.standoff_cm = CHASE.standoff_cm
+        #: None means "whatever the settings page says". Only a deliberate
+        #: configure() pins it, so dragging the slider works, and a value
+        #: somebody set for this run is not silently overwritten by one
+        #: they changed for the next.
+        self._standoff_override = None
 
         #: Steering gains live on the PID but are read from the register at
         #: every tick, so turning the knob on the page takes effect without
@@ -212,6 +216,11 @@ class FollowBehavior(Behavior):
         self._seen_at = 0.0
         self.state = "waiting"
 
+    @property
+    def standoff_cm(self):
+        return (CHASE.standoff_cm if self._standoff_override is None
+                else self._standoff_override)
+
     def _new_track(self):
         """One patience, not two.
 
@@ -228,8 +237,8 @@ class FollowBehavior(Behavior):
             self._reset()
         if "standoff_cm" in kwargs:
             try:
-                self.standoff_cm = max(25.0, min(200.0, float(kwargs["standoff_cm"])))
-                self.distance_pid.setpoint = self.standoff_cm
+                self._standoff_override = max(
+                    25.0, min(200.0, float(kwargs["standoff_cm"])))
             except (TypeError, ValueError):
                 pass
         if "orbit" in kwargs:
@@ -267,9 +276,15 @@ class FollowBehavior(Behavior):
             self.state = "no camera"
             return Velocity.STOP
 
-        # Live gains, so the page can tune the loop while it runs.
+        # Live gains and live setpoints, so the page can tune the loop
+        # while it runs. All of them, not the two that were easiest: a
+        # promise of live tuning that holds for half the knobs is worse
+        # than none, because the half that does not work looks like a
+        # control loop that ignores its settings.
         self.turn_pid.kp = CHASE.turn_kp
         self.turn_pid.kd = CHASE.turn_kd
+        self.distance_pid.setpoint = self.standoff_cm
+        self.forward_pid.setpoint = CHASE.target_fill
 
         self.track.update(world.detections, world.frame_size, world.dt)
         if self.track.fresh:
@@ -301,9 +316,9 @@ class FollowBehavior(Behavior):
 
             turning = self.search.steer(world.turned, world.dt)
             if turning is None:
-                self.state = (f"no {self.target} in view"
-                              if not self.search.searching
-                              else f"lost the {self.target}")
+                self.state = (f"lost the {self.target}"
+                              if self.search.gave_up
+                              else f"no {self.target} in view")
                 return Velocity.STOP
             self.state = self.search.describe(self.target)
             # Camera only. Driving towards something nobody can currently

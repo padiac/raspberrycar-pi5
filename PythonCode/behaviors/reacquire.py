@@ -122,6 +122,11 @@ class Reacquire:
         self.elapsed = 0.0
         self.aim = 0.0              # heading currently being turned towards
         self.blind = False          # no gyro, so no closing the loop
+        #: Searched and found nothing, as opposed to never having had
+        #: anything to search for. The caller cannot work this out from
+        #: `searching` alone, because giving up clears that too, and the
+        #: two cases want different words on the page.
+        self.gave_up = False
 
     def _get(self, name):
         chosen = self._settings.get(name)
@@ -132,6 +137,7 @@ class Reacquire:
     def found(self):
         """The target is back. Nothing to remember."""
         self.searching = False
+        self.gave_up = False
         self.elapsed = 0.0
 
     def lost(self, last_offset, last_drift, turned, have_gyro=True):
@@ -139,6 +145,7 @@ class Reacquire:
         if self.searching:
             return
         self.searching = True
+        self.gave_up = False
         self.elapsed = 0.0
         self.anchor = turned if turned is not None else 0.0
         self.blind = not have_gyro
@@ -168,6 +175,7 @@ class Reacquire:
         self.elapsed += max(0.0, dt or 0.0)
         if self.elapsed > self._get("patience_s"):
             self.searching = False
+            self.gave_up = True
             return None
 
         effort = self._get("effort")
@@ -219,6 +227,7 @@ class Reacquire:
     def status(self):
         return {
             "searching": self.searching,
+            "gave_up": self.gave_up,
             "elapsed": round(self.elapsed, 1),
             "side": "right" if self.side > 0 else "left",
             "anchor": round(self.anchor, 1),
