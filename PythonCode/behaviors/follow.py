@@ -62,6 +62,7 @@ from control import PID, TargetTrack
 from hal import Velocity
 
 from .base import Behavior
+from .reacquire import Reacquire
 
 #: How far to sit from whatever is being followed, in centimetres. A real
 #: measurement in a unit you can hold a ruler up to, rather than a fraction of
@@ -202,6 +203,13 @@ class FollowBehavior(Behavior):
         self.forward_pid = PID(kp=2.0, kd=0.2, setpoint=CHASE.target_fill)
 
         self.track = self._new_track()
+        #: Where to look when the target has gone. Owned here rather than
+        #: by the track, because losing something is a fact and deciding
+        #: to go and look for it is intent, and this layer is the one that
+        #: is allowed to have intentions.
+        self.search = Reacquire()
+        #: Heading at the last real sighting; see update().
+        self._seen_at = 0.0
         self.state = "waiting"
 
     def _new_track(self):
@@ -233,6 +241,8 @@ class FollowBehavior(Behavior):
 
     def _reset(self):
         self.track = self._new_track()
+        self.search.found()
+        self._seen_at = 0.0
         self.turn_pid.reset()
         self.distance_pid.reset()
         self.forward_pid.reset()
@@ -262,16 +272,45 @@ class FollowBehavior(Behavior):
         self.turn_pid.kd = CHASE.turn_kd
 
         self.track.update(world.detections, world.frame_size, world.dt)
+        if self.track.fresh:
+            # The heading the target was last actually seen from, which is
+            # not the heading at which the track is declared dead: it coasts
+            # for up to lost_patience ticks first, and the car keeps turning
+            # throughout. Anchoring the search on the later of the two sends
+            # it back to where the target already was not.
+            self._seen_at = world.turned
 
         if not self.track.alive:
             # Either never seen, or coasted for longer than it is worth.
+            if self.track.seen > 0:
+                # It was there a moment ago, and the commonest reason it is
+                # not there now is that this car turned away from it. Start
+                # a search anchored on the heading it was last seen from,
+                # before forgetting the belief that says which way it went.
+                #
+                # `turn_rate` is None when the gyro is not answering, which
+                # is not the same as not turning -- the search has to know
+                # the difference, because without a heading it cannot close
+                # the loop and has to sweep blind instead.
+                self.search.lost(self.track.offset, self.track.drift,
+                                 self._seen_at, world.turn_rate is not None)
             # Forgetting rather than keeping a stale belief means the next
             # sighting starts a clean track instead of being gated against
             # a prediction made a long time ago from somewhere else.
             self.track.forget()
-            self.state = f"no {self.target} in view"
-            return Velocity.STOP
 
+            turning = self.search.steer(world.turned, world.dt)
+            if turning is None:
+                self.state = (f"no {self.target} in view"
+                              if not self.search.searching
+                              else f"lost the {self.target}")
+                return Velocity.STOP
+            self.state = self.search.describe(self.target)
+            # Camera only. Driving towards something nobody can currently
+            # see is a different and much worse idea than looking for it.
+            return Velocity(omega=turning)
+
+        self.search.found()
         offset = self.track.offset
         drift = self.track.drift
 
@@ -382,4 +421,5 @@ class FollowBehavior(Behavior):
             "standoff_cm": self.standoff_cm,
             "state": self.state,
             "track": self.track.status(),
+            "search": self.search.status(),
         }

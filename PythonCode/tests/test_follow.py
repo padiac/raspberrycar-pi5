@@ -201,6 +201,67 @@ for _ in range(40):
 check("a target that never comes back is given up", gone.track.alive, False)
 check("  and not remembered as a stale guess", gone.track.offset, None)
 
+
+print()
+print("the car turned away from it, so the car knows where to look")
+
+# Reported from the room: the ball was in view, the car turned, the ball
+# was not in view, and the car sat there for ever. The car is the reason
+# the ball left, and the gyro has been counting all along, so where to
+# look again is a number rather than a guess -- and it needs nothing from
+# the lens, because "turn back to the heading it was seen from" does not
+# care how many degrees wide the picture is.
+#
+# Exercised through the real behaviour rather than the search on its own,
+# because the part that was wrong first time was the wiring: which heading
+# gets remembered, and whether it is taken at the last sighting or several
+# coasting ticks later when the track is finally declared dead.
+
+
+def seen_at(offset, turned):
+    box_h = 0.30 * HEIGHT
+    centre = WIDTH / 2 + offset * (WIDTH / 2)
+    return WorldState(
+        dt=0.05, frame_size=(WIDTH, HEIGHT),
+        detections=[Detection("bottle", 0.9,
+                              (centre - 40, (HEIGHT - box_h) / 2,
+                               centre + 40, (HEIGHT + box_h) / 2), 39)],
+        range_cm=STANDOFF_CM, range_expected=True, range_forward=True,
+        turned=turned, turn_rate=0.0)
+
+
+def nothing_at(turned):
+    return WorldState(dt=0.05, frame_size=(WIDTH, HEIGHT), detections=[],
+                      range_cm=STANDOFF_CM, range_expected=True,
+                      turned=turned, turn_rate=0.0)
+
+
+hunting = follower()
+for _ in range(4):
+    hunting.update(FakeRobot(), seen_at(-0.8, turned=0.0))
+# The car swings right. The ball leaves the frame on the left because of
+# that swing and for no other reason.
+for step in range(30):
+    out = hunting.update(FakeRobot(), nothing_at(turned=4.0 * (step + 1)))
+
+check("lost because the car turned right: it turns back left",
+      out.omega < 0, True)
+check("  and does not drive at something nobody can see", out.vx, 0.0)
+check("  and says that is what it is doing",
+      "looking" in hunting.status()["state"]
+      or "searching" in hunting.status()["state"], True)
+# Anchored at the last sighting. Coasting runs for lost_patience ticks
+# first and the car keeps turning throughout, so anchoring on the death of
+# the track instead would send it back to a heading the ball had left.
+check("  anchored where it was last actually seen, not where the track died",
+      hunting.status()["search"]["anchor"], 0.0)
+
+# And it stops rather than turning for ever.
+for _ in range(400):
+    out = hunting.update(FakeRobot(), nothing_at(turned=120.0))
+check("  and eventually gives up instead of turning for ever",
+      (out.vx, out.omega), (0.0, 0.0))
+
 print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")

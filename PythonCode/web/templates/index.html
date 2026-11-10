@@ -633,8 +633,25 @@
     collision themselves and does not need their controls frozen.</p>
 </div>
 
+<style>
+/* Loud on purpose. This hides the other seventy-nine classes, and the
+   reason it needs saying is that nothing else on the page can explain
+   the symptom: the detector is working, the confidence is fine, and the
+   thing in front of the camera is simply never reported. */
+.warnbar {
+  background: var(--warn, #d2a106); color: #1a1a1a;
+  border-radius: 6px; padding: 7px 10px; margin-bottom: 10px;
+  font-size: 13px; line-height: 1.35;
+}
+.warnbar button {
+  margin-left: 8px; border: 0; border-radius: 4px; cursor: pointer;
+  background: #1a1a1a; color: #fff; padding: 3px 9px; font-size: 12px;
+}
+</style>
+
 <div class="panel">
   <h2>Seen right now <em>tap to track</em></h2>
+  <div id="classfilter" class="warnbar" style="display:none"></div>
   <div id="objects"><span class="none">detection off</span></div>
   <div class="row" style="margin-top:15px">
     <button class="toggle on" id="cambtn">Camera</button>
@@ -1350,6 +1367,28 @@ function renderTree(node, prefix = '', isLast = true, isRoot = true) {
 const seenAt = new Map();     // label -> when it was last detected
 const LINGER = 2500;
 
+let filterShown = null;
+
+function renderFilter(d) {
+  const bar = $('classfilter');
+  const classes = ((d.detector || {}).classes) || [];
+  // Only when it changes. Rebuilding this on every poll swapped the
+  // button out from under the mouse between press and release, so the
+  // one way out of the state being warned about did not reliably work.
+  const now = classes.join('\u0000');
+  if (now === filterShown) return;
+  filterShown = now;
+  if (!classes.length) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  bar.innerHTML =
+    'Only looking for <b>' + classes.join(', ') + '</b> \u2014 every other '
+    + 'class is being thrown away after it is detected, so the confidence '
+    + 'slider will not bring it back.'
+    + '<button id="clearfilter">Show everything</button>';
+  $('clearfilter').onclick = () =>
+    post('/api/detect', {classes: []});
+}
+
 function renderObjects(d) {
   const box = $('objects');
   const now = Date.now();
@@ -1678,6 +1717,7 @@ async function telemetry() {
 
     renderObjects(d);
 
+    renderFilter(d);
     const scan = d.scan || {};
     drawFan(scan, sf, d.proximity, d.pan);
     $('fanwhen').textContent = scan.spokes
