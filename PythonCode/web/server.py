@@ -384,7 +384,7 @@ def api_detect():
             # silently narrowing what the next one can see is a worse
             # surprise than retyping it.
             settings.set("vision.detect_confidence",
-                         robot.detector.confidence)
+                         robot.detector.status().get("confidence"))
     if "target_fps" in data:
         stored = settings.set("vision.detect_fps", data["target_fps"])
         if stored is None:

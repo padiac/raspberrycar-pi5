@@ -105,7 +105,30 @@ class Hardware:
 
 
 def _load_detector():
-    """Imported late: it pulls in the whole inference stack, which is slow
-    and which a car with no camera has no use for."""
-    from perception.detector import Detector
-    return Detector()
+    """Every way of recognising something, behind one object.
+
+    Two finders, for two different jobs. The neural network knows eighty
+    kinds of thing and is the only option for most of them. The ball finder
+    knows one thing and knows it far better: measured on this car, the
+    detector scored this ball 0.287 with it filling a third of the frame,
+    and found it in two looks out of forty at the gate it was set to, while
+    threshold-and-contour finds it every frame in a fifth of the time.
+
+    The detector is imported late because it pulls in the whole inference
+    stack, which is slow and which a car with no camera has no use for. It
+    is also imported *separately*, so that a Pi with no ultralytics still
+    gets a car that can follow a ball rather than a car with no vision at
+    all -- which is the same rule the hardware drivers follow, applied one
+    layer up.
+    """
+    from perception.blob import BallFinder, Sight
+
+    finders = []
+    try:
+        from perception.detector import Detector
+        finders.append(Detector())
+    except Exception as exc:    # noqa: BLE001 - absent is survivable here
+        print(f"[hw] object detector unavailable, ball finder only ({exc})",
+              flush=True)
+    finders.append(BallFinder())
+    return Sight(*finders)

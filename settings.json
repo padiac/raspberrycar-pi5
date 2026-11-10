@@ -6,7 +6,7 @@
   "safety.no_echo_ceiling": 1.0,
   "safety.slow_cm": 20.0,
   "safety.stop_cm": 10.0,
-  "vision.detect_confidence": 0.4,
+  "vision.detect_confidence": 0.25,
   "vision.detect_enabled": true,
   "vision.detect_fps": 24.0
 }

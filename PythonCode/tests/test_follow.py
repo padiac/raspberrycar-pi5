@@ -87,10 +87,27 @@ print("a reading is only about the target while the target is ahead")
 # The rangefinder points down the middle of the car. With the target off to one
 # side it is measuring whatever happens to be straight ahead, which is not the
 # thing being followed -- and a wall at 30cm would read as "arrived".
-side = follower().update(
-    FakeRobot(), world(offset=AHEAD_DEADBAND + 0.3, range_cm=STANDOFF_CM + 60))
-check_sign("target off to the side: do not drive on that reading", side.vx, 0)
-check("  but do turn towards it", abs(side.omega) > 0.01, True)
+#
+# This used to be enforced by refusing to move at all while the target was
+# off to one side, which produced a car that turned, started, drifted back
+# over the edge of the band, and stopped -- reported as going forward "in
+# fits and starts". The invariant was never "do not move". It was "do not
+# believe that number". So the check is now the invariant itself: off to
+# the side, what the rangefinder says must make no difference whatsoever.
+aside = AHEAD_DEADBAND + 0.3
+near = follower().update(FakeRobot(), world(offset=aside, range_cm=20.0))
+far = follower().update(
+    FakeRobot(), world(offset=aside, range_cm=STANDOFF_CM + 60))
+check("target off to the side: a reading of 20cm and one of 105cm give "
+      "exactly the same answer", round(near.vx, 9), round(far.vx, 9))
+check("  but it does turn towards it", abs(far.omega) > 0.01, True)
+
+# ...and it approaches more cautiously than it would with the target in
+# front, because the part of the motion that is not towards the target is
+# wasted and the turn is the more urgent half.
+head_on = follower().update(FakeRobot(), world(offset=0.0, range_cm=None))
+check("  and more slowly than it would head-on", far.vx < head_on.vx, True)
+check("  which is still forwards, not a stop", far.vx > 0.0, True)
 
 print()
 print("falling back when the ultrasonic hears nothing")
@@ -137,6 +154,52 @@ check("no target: stopped", (out.vx, out.vy, out.omega), (0.0, 0.0, 0.0))
 
 blind = WorldState(dt=0.05, frame_size=(0, 0))
 check("no camera: stopped", follower().update(FakeRobot(), blind).moving, False)
+
+
+print()
+print("holding on to the one it is following")
+
+# The complaint that started this: "if there are two things in the picture,
+# which one does it follow?" The old answer was "whichever measures bigger
+# this frame", decided afresh every tick, so two similar targets could swap
+# without anything in the code noticing.
+behaviour = follower()
+behaviour.update(FakeRobot(), world(offset=-0.3, range_cm=STANDOFF_CM))
+both = WorldState(
+    dt=0.05, frame_size=(WIDTH, HEIGHT),
+    detections=[
+        Detection("bottle", 0.9, (WIDTH / 2 - 0.28 * WIDTH / 2 - 40,
+                                  120, WIDTH / 2 - 0.28 * WIDTH / 2 + 40, 240), 39),
+        # Bigger, and across the room. Bigger is not the question.
+        Detection("bottle", 0.9, (WIDTH / 2 + 0.6 * WIDTH / 2 - 70,
+                                  60, WIDTH / 2 + 0.6 * WIDTH / 2 + 70, 300), 39),
+    ],
+    range_cm=STANDOFF_CM, range_expected=True, range_forward=True)
+behaviour.update(FakeRobot(), both)
+check("a second, larger target does not steal the car",
+      behaviour.track.offset < 0, True)
+
+# A detector that blinks for a frame or two used to mean stopping dead and
+# starting again. Now the belief coasts, so the car keeps turning towards
+# where the target was going.
+blinking = follower()
+for step in range(6):
+    blinking.update(FakeRobot(), world(offset=-0.1 - 0.06 * step,
+                                       range_cm=STANDOFF_CM))
+moving_left = WorldState(dt=0.05, frame_size=(WIDTH, HEIGHT), detections=[],
+                         range_cm=STANDOFF_CM, range_expected=True)
+coasting = blinking.update(FakeRobot(), moving_left)
+check("one missed look does not stop the turn", abs(coasting.omega) > 0.01, True)
+check("  but it does stop driving at something nobody can see",
+      coasting.vx, 0.0)
+check("  and it says so", "coasting" in blinking.status()["state"], True)
+
+gone = follower()
+gone.update(FakeRobot(), world(offset=0.2, range_cm=STANDOFF_CM))
+for _ in range(40):
+    gone.update(FakeRobot(), moving_left)
+check("a target that never comes back is given up", gone.track.alive, False)
+check("  and not remembered as a stale guess", gone.track.offset, None)
 
 print()
 if FAILURES:

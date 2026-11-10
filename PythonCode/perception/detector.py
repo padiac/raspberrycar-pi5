@@ -29,6 +29,11 @@ def colour_for(class_id):
 
 
 class Detector:
+    #: Named like every other thing that fills a role, so the startup log
+    #: and the status page say which finder produced a sighting rather
+    #: than printing a class name.
+    label = "YOLO26n on the CPU"
+
     def __init__(self, confidence=0.4):
         from ultralytics import YOLO
 

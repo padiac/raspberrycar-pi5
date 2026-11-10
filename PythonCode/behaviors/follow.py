@@ -22,13 +22,43 @@ The apparent-size estimate is kept as a fallback rather than deleted, because
 an ultrasonic does not hear everything. A small soft ball can return no echo
 at all, and a follow behaviour that stops working when one sensor goes quiet
 is worse than one that gets vaguer.
+
+## What changed, and what it looked like from outside
+
+This used to read the newest detection every tick and hand it straight to a
+PID. Three complaints, all the same bug wearing different clothes:
+
+*"It wobbles left and right, like it is being very lively."* Two causes,
+and the measurement put them in the opposite order to the guess. The small
+one: the PID's D term differentiated the raw box position, and dividing a
+measured 0.0005 of jitter by a 0.05s tick and the old effective gain of six
+manufactured about 0.086 of turn authority out of a ball that was not
+moving. The large one: at the confidence gate it was set to, the detector
+found that ball in two looks out of forty, so the loop was mostly stopped
+and occasionally issuing a command at full strength. Intermittent looks
+livelier than noisy.
+
+*"It goes forward in fits and starts."* Forward motion was switched off
+outright whenever the target sat more than `ahead_deadband` off centre, so
+the car turned, started, drifted past the edge of the band, stopped, turned
+again.
+
+*"With two balls, which one does it follow?"* Whichever measured larger
+**this frame**, decided afresh every tick. It could swap between two similar
+targets without anything noticing, and nothing in the code could have told
+you which one it was on.
+
+All three are now one answer: a `TargetTrack` sits between the detector and
+the controllers. It keeps an identity, it carries velocity as part of its
+state so the D term never has to differentiate anything, and it coasts on
+its own prediction through the frames where the detector blinks.
 """
 
 from settings import Spec, group
 
 import cv2
 
-from control import PID
+from control import PID, TargetTrack
 from hal import Velocity
 
 from .base import Behavior
@@ -53,20 +83,51 @@ CENTRE_DEADBAND = 0.05
 #: Off to one side, turn to face it first and do not pretend to know how far
 #: away it is -- which also keeps the head forward, where the safety layer
 #: needs it to allow any forward motion at all.
+#:
+#: This now gates *which estimate of distance is believed*, not whether the
+#: car may move at all; see `APPROACH_FALLOFF`.
 AHEAD_DEADBAND = 0.25
+
+#: How sharply approach speed falls off as the target moves off centre.
+#:
+#: The old code made this a cliff: inside the band, full speed; outside it,
+#: nothing. A cliff in a control law is a thing the car will sit on, because
+#: the moment it starts moving it also starts turning, and turning is what
+#: carries the target back across the edge. Hence the stop-start.
+#:
+#: A slope instead. At dead centre nothing is lost; at a quarter off centre
+#: a quarter of the speed is; at the frame edge the car is only turning.
+#: Travelling mostly-forwards while still swinging round wastes very little
+#: -- the component of the motion that is not towards the target goes as the
+#: cosine, which is 0.97 at fifteen degrees -- so there was never much to
+#: buy by refusing outright.
+APPROACH_FALLOFF = 1.0
+
+#: Steering gains. Proportional to where the target is, derivative on how
+#: fast it is crossing the frame.
+#:
+#: The derivative gain reads very differently now and the old number would
+#: be wrong. It used to multiply a frame-to-frame difference already divided
+#: by dt, so its effective size was kd/dt -- 0.3/0.05, an effective gain of
+#: six against a proportional gain of 1.6. Here it multiplies a velocity
+#: estimated from the whole history, in half-frame-widths per second, so it
+#: means what it says: a target crossing the frame at one half-width a
+#: second adds this much steering to meet it.
+TURN_KP = 1.6
+TURN_KD = 0.25
 
 MAX_FORWARD = 0.6
 MAX_TURN = 0.8
 MAX_STRAFE = 0.5
 
-#: Frames without the target before giving up, rather than driving on blind.
-LOST_PATIENCE = 8
+#: Looks without the target before giving up, rather than driving on blind.
+#: Larger than it used to be because the track now coasts through the gap on
+#: a prediction instead of simply holding still, so the frames are useful
+#: rather than merely tolerated.
+LOST_PATIENCE = 12
 
-
-#: The register entry for the numbers above, which keep their
-#: explanations and become the defaults.
 CHASE = group(
-    "follow",
+    'follow',
     standoff_cm=Spec(
         STANDOFF_CM, unit='cm', bounds=(5.0, 300.0),
         help='How far behind the target it tries to sit when a range reading is available.'),
@@ -84,7 +145,23 @@ CHASE = group(
         help='How far off centre the target may drift before it turns.'),
     ahead_deadband=Spec(
         AHEAD_DEADBAND, unit='', bounds=(0.0, 1.0),
-        help='How far off centre still counts as straight ahead.'),
+        help='How far off centre the target may be and still have the '
+             'rangefinder believed about it. Beyond this the head is '
+             'pointing at something else, so apparent size is used instead.'),
+    approach_falloff=Spec(
+        APPROACH_FALLOFF, unit='', bounds=(0.0, 3.0),
+        help='How much approach speed is given up for being off centre. '
+             'Zero drives at full speed whatever the bearing; one gives up '
+             'all of it at the frame edge; higher turns more before moving.'),
+    turn_kp=Spec(
+        TURN_KP, unit='', bounds=(0.0, 10.0),
+        help='Steering response to where the target is.'),
+    turn_kd=Spec(
+        TURN_KD, unit='', bounds=(0.0, 5.0),
+        help='Steering response to how fast the target is crossing the '
+             'frame. Damps the swing on the way in and leads a moving '
+             'target. Raise it if the car overshoots and comes back; lower '
+             'it if the car twitches.'),
     max_forward=Spec(
         MAX_FORWARD, unit='', bounds=(0.0, 1.0),
         help='Fastest it will chase.'),
@@ -96,8 +173,10 @@ CHASE = group(
         help='Hardest it will slide sideways while chasing.'),
     lost_patience=Spec(
         LOST_PATIENCE, unit='frames', bounds=(1.0, 200.0),
-        help='Frames without the target before it gives up.'),
+        help='Looks without a sighting before it gives up. Until then it '
+             'keeps turning towards where the target was going.'),
 )
+
 
 class FollowBehavior(Behavior):
     name = "follow"
@@ -111,14 +190,29 @@ class FollowBehavior(Behavior):
         self.target = target
         self.orbit = 0.0            # -1 .. 1, sideways circling (mecanum only)
         self.standoff_cm = CHASE.standoff_cm
-        self.turn_pid = PID(kp=1.6, kd=0.3, setpoint=0.0)
+
+        #: Steering gains live on the PID but are read from the register at
+        #: every tick, so turning the knob on the page takes effect without
+        #: a restart -- which is the only way tuning a control loop by feel
+        #: is bearable.
+        self.turn_pid = PID(kp=CHASE.turn_kp, kd=CHASE.turn_kd, setpoint=0.0)
         #: Gain is per centimetre: 35cm too far asks for 0.7, which the clamp
         #: below brings to CHASE.max_forward.
         self.distance_pid = PID(kp=0.02, kd=0.005, setpoint=CHASE.standoff_cm)
         self.forward_pid = PID(kp=2.0, kd=0.2, setpoint=CHASE.target_fill)
-        self.lost_frames = 0
-        self.box = None
+
+        self.track = self._new_track()
         self.state = "waiting"
+
+    def _new_track(self):
+        """One patience, not two.
+
+        `TargetTrack` has its own default for how long to coast, for the
+        benefit of anything else that uses one. Here the number the owner
+        can see on the settings page wins, so there is exactly one knob
+        rather than two that disagree.
+        """
+        return TargetTrack(self.target, patience=CHASE.lost_patience)
 
     def configure(self, **kwargs):
         if kwargs.get("target"):
@@ -138,51 +232,60 @@ class FollowBehavior(Behavior):
         return self.status()
 
     def _reset(self):
-        self.lost_frames = 0
-        self.box = None
+        self.track = self._new_track()
         self.turn_pid.reset()
         self.distance_pid.reset()
         self.forward_pid.reset()
+
+    @property
+    def box(self):
+        """The last box seen, for the overlay. Read off the track so there
+        is one place that knows what is being followed."""
+        return self.track.box
 
     def start(self, robot):
         self._reset()
         self.state = "waiting"
 
     def stop(self, robot):
-        self.box = None
+        self.track.forget()
 
     def update(self, robot, world):
         width, height = world.frame_size
         if not width or not height:
+            self.track.forget()
             self.state = "no camera"
             return Velocity.STOP
 
-        target = world.largest(self.target)
-        if target is None:
-            self.lost_frames += 1
-            if self.lost_frames > CHASE.lost_patience:
-                self.box = None
-                self.state = f"no {self.target} in view"
-            else:
-                # Briefly missing: the detector drops a frame now and then, so
-                # coast rather than stamping on the brakes.
-                self.state = f"{self.target} lost ({self.lost_frames})"
+        # Live gains, so the page can tune the loop while it runs.
+        self.turn_pid.kp = CHASE.turn_kp
+        self.turn_pid.kd = CHASE.turn_kd
+
+        self.track.update(world.detections, world.frame_size, world.dt)
+
+        if not self.track.alive:
+            # Either never seen, or coasted for longer than it is worth.
+            # Forgetting rather than keeping a stale belief means the next
+            # sighting starts a clean track instead of being gated against
+            # a prediction made a long time ago from somewhere else.
+            self.track.forget()
+            self.state = f"no {self.target} in view"
             return Velocity.STOP
 
-        self.lost_frames = 0
-        self.box = target.box
+        offset = self.track.offset
+        drift = self.track.drift
 
         # -- turn: drive the horizontal offset to zero ----------------------
-        offset = (target.centre_x - width / 2) / (width / 2)
         omega = 0.0
         if abs(offset) > CHASE.centre_deadband:
             # PID error is (setpoint - measured) = -offset, so a target to the
             # right gives a negative output; flip it back to "turn right".
-            omega = -self.turn_pid.update(offset, world.dt)
+            # The rate comes from the track's own state rather than from
+            # subtracting two sightings -- see PID.update().
+            omega = -self.turn_pid.update(offset, world.dt, rate=drift)
             omega = max(-CHASE.max_turn, min(CHASE.max_turn, omega))
 
         # -- drive: hold a real distance, and fall back to apparent size ----
-        fill = target.height / height
         ahead = abs(offset) < CHASE.ahead_deadband
         measured = (
             world.range_cm
@@ -199,37 +302,77 @@ class FollowBehavior(Behavior):
             if abs(measured - self.standoff_cm) > CHASE.distance_deadband_cm:
                 vx = -self.distance_pid.update(measured, world.dt)
             how = f"{measured:.0f}cm"
-        elif not ahead:
-            # Turning to face it. Refusing to guess at the distance here is not
-            # caution for its own sake: the rangefinder is pointed down the
-            # middle of the car, so while the target is off to one side, any
-            # number it gives is about something else entirely.
-            how = "turning to face"
         else:
-            # No echo. The camera's estimate is worse, and worse is not nothing.
-            if abs(CHASE.target_fill - fill) > CHASE.fill_deadband:
-                vx = self.forward_pid.update(fill, world.dt)
-            how = f"fill {fill:.2f} (no echo)"
+            # No usable echo, or the target is off to one side where the
+            # rangefinder is pointed at something else entirely. The camera's
+            # estimate is worse, and worse is not nothing -- which is a change
+            # from the old behaviour, where being off to one side meant not
+            # moving at all and produced the stop-start.
+            fill = self.track.size.value
+            if fill is None:
+                how = "no size yet"
+            else:
+                if abs(CHASE.target_fill - fill) > CHASE.fill_deadband:
+                    vx = self.forward_pid.update(
+                        fill, world.dt, rate=self.track.size.rate)
+                how = ("fill %.2f (%s)"
+                       % (fill, "off to one side" if not ahead else "no echo"))
+
+        # Approach along the line of sight rather than across it. A slope,
+        # not the cliff this used to be.
+        facing = max(0.0, 1.0 - CHASE.approach_falloff * abs(offset))
+        vx *= facing
+
+        if not self.track.fresh:
+            # Coasting on a prediction. Turning towards where the target was
+            # going is a reasonable bet and costs nothing if it is wrong;
+            # driving at something nobody can currently see is neither.
+            vx = 0.0
 
         vx = max(-CHASE.max_forward, min(CHASE.max_forward, vx))
         vy = self.orbit * CHASE.max_strafe
 
         self.state = (
-            f"{self.target} {target.confidence:.2f} | off {offset:+.2f} | {how}"
+            "%s %.2f | off %+.2f | %s%s"
+            % (self.target, self.track.confidence, offset, how,
+               "" if self.track.fresh else " | coasting %d" % self.track.missed)
         )
         return Velocity(vx=vx, vy=vy, omega=omega)
 
     def overlay(self, frame):
-        if self.box is None:
-            return frame
-        x1, y1, x2, y2 = self.box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        """Draw what is believed as well as what was seen.
+
+        Three marks, because the difference between them is the whole point
+        of the estimator and is otherwise invisible: the red box is the raw
+        sighting, the green crosshair is the filtered position the steering
+        actually uses, and the yellow line is where the car is pointing. A
+        green cross that sits still while the red box shivers around it is
+        the fix working, visible at a glance on the video.
+        """
         height, width = frame.shape[:2]
-        centre_x = (x1 + x2) // 2
-        # The target line against the frame centre line makes the steering
-        # error visible at a glance.
-        cv2.line(frame, (centre_x, 0), (centre_x, height), (0, 0, 255), 1)
         cv2.line(frame, (width // 2, 0), (width // 2, height), (255, 255, 0), 1)
+
+        box = self.track.box
+        if box is not None and self.track.fresh:
+            x1, y1, x2, y2 = (int(v) for v in box)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+        if self.track.alive and self.track.offset is not None:
+            believed_x = int((self.track.offset + 1.0) * width / 2.0)
+            believed_y = height // 2
+            if self.track.y.known:
+                believed_y = int((self.track.y.value + 1.0) * height / 2.0)
+            colour = (0, 220, 0) if self.track.fresh else (0, 180, 220)
+            cv2.line(frame, (believed_x, believed_y - 14),
+                     (believed_x, believed_y + 14), colour, 2)
+            cv2.line(frame, (believed_x - 14, believed_y),
+                     (believed_x + 14, believed_y), colour, 2)
+            # Where it will be in a third of a second, if it keeps going.
+            lead = int(self.track.drift * width / 2.0 * 0.33)
+            if abs(lead) > 3:
+                cv2.arrowedLine(frame, (believed_x, believed_y),
+                                (believed_x + lead, believed_y), colour, 2,
+                                tipLength=0.3)
         return frame
 
     def status(self):
@@ -238,4 +381,5 @@ class FollowBehavior(Behavior):
             "orbit": self.orbit,
             "standoff_cm": self.standoff_cm,
             "state": self.state,
+            "track": self.track.status(),
         }
