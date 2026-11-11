@@ -333,20 +333,42 @@ class SerialLink:
         since = max(self.telemetry.updated or 0.0, self._opened_at or 0.0)
         return since and (time.monotonic() - since) > SILENCE_S
 
+    def _note_stray(self, line):
+        """Pass on what the board says outside the protocol, a little of it.
+
+        When the ESP32 panics it prints why, and a backtrace, on this same
+        port before restarting -- the only account of the crash there is.
+        Dropping every line that was not a frame threw exactly that away.
+        """
+        if not line or not any(c.isalpha() for c in line):
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_stray_window", 0.0) > 10.0:
+            self._stray_window, self._stray_count = now, 0
+        self._stray_count += 1
+        if self._stray_count <= 40:
+            print("[esp32 says] %s" % line[:200], flush=True)
+
     def _reopen(self):
         # A reopen that did not buy more than a few seconds of telemetry did
         # not fix anything, so the next one is allowed to reset the board.
         now = time.monotonic()
         self._next_hard = (now - self._last_reopen) < ESCALATE_S
         self._last_reopen = now
-        try:
-            self.port.close()
-        except Exception:  # noqa: BLE001
-            pass
-        self.connected = False
+        # Under the write lock. Closing while another thread was mid-write
+        # let that write land on whatever reused the file descriptor next --
+        # it once came back as the body of an HTTP response, a velocity frame
+        # sent to a web browser instead of the motors.
+        with self.lock:
+            self.connected = False
+            try:
+                self.port.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _handle(self, line):
         if not line.startswith("$") or "*" not in line:
+            self._note_stray(line)
             return
         body, _, given = line[1:].partition("*")
         try:

@@ -35,6 +35,7 @@
 
 #include <ESP32Servo.h>
 #include <Wire.h>
+#include <esp_system.h>
 
 // ---- pins -----------------------------------------------------------------
 #define TRIG 2
@@ -239,11 +240,29 @@ char gLine[96];
 uint8_t gLen = 0;
 
 // ---- motors ---------------------------------------------------------------
+// Only touch the PWM when the duty actually changes. loop() re-applies the
+// mixer on every pass, tens of thousands of times a second, and on the
+// original ESP32 every ledcWrite spins -- inside a critical section, with
+// interrupts off -- until the previous update has latched. Done that often
+// while the motors were pulling current, it eventually never latched: the
+// board hung in ledc_ll_set_duty_start and the interrupt watchdog restarted
+// it, every few minutes of driving. Decoded from the panic backtrace, not
+// guessed. Same duty means the same pins, so skipping it changes nothing.
+int gDuty[40];
+bool gDutyKnown[40];
+int gDir[40];
+
 void driveMotor(int pwmPin, int in1, int in2, float speed) {
   speed = constrain(speed, -1.0f, 1.0f);
-  digitalWrite(in1, speed >= 0);
-  digitalWrite(in2, speed < 0);
-  ledcWrite(pwmPin, (int)(fabs(speed) * 255));
+  int duty = (int)(fabs(speed) * 255);
+  int dir = speed >= 0 ? 1 : -1;
+  if (gDutyKnown[pwmPin] && gDuty[pwmPin] == duty && gDir[pwmPin] == dir) return;
+  digitalWrite(in1, dir > 0);
+  digitalWrite(in2, dir < 0);
+  ledcWrite(pwmPin, duty);
+  gDuty[pwmPin] = duty;
+  gDir[pwmPin] = dir;
+  gDutyKnown[pwmPin] = true;
 }
 
 // Mecanum inverse kinematics. The rollers sit at 45 degrees so each wheel
@@ -442,7 +461,25 @@ void setup() {
   stopNow();
 
   delay(300);
-  sendLine("!,bridge ready");
+  // Say why this board started. It restarts by itself while the car is
+  // moving, and the only way to tell a power dip from a crash or a watchdog
+  // is to ask it -- the Pi only ever sees the greeting.
+  const char *why = "other";
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  why = "power on"; break;
+    case ESP_RST_EXT:      why = "reset pin"; break;
+    case ESP_RST_SW:       why = "software"; break;
+    case ESP_RST_PANIC:    why = "crash"; break;
+    case ESP_RST_INT_WDT:  why = "interrupt watchdog"; break;
+    case ESP_RST_TASK_WDT: why = "task watchdog"; break;
+    case ESP_RST_WDT:      why = "watchdog"; break;
+    case ESP_RST_BROWNOUT: why = "brownout"; break;
+    case ESP_RST_DEEPSLEEP: why = "deep sleep"; break;
+    default: break;
+  }
+  char banner[64];
+  snprintf(banner, sizeof banner, "!,bridge ready (reset: %s)", why);
+  sendLine(banner);
 }
 
 void loop() {
