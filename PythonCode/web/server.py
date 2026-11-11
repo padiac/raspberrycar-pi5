@@ -391,11 +391,14 @@ def api_detect():
             return jsonify(error="target_fps must be a number up to 60"), 400
         robot.vision.detect_target_fps = stored
 
-    return jsonify(
-        enabled=robot.vision.detect_enabled,
-        target_fps=robot.vision.detect_target_fps,
+    # The detector's status has its own `enabled`, so passing both as keyword
+    # arguments was a TypeError and every press of the Detection switch
+    # answered 500. Whether detection is running is the vision's to say.
+    return jsonify({
         **robot.detector.status(),
-    )
+        "enabled": robot.vision.detect_enabled,
+        "target_fps": robot.vision.detect_target_fps,
+    })
 
 
 @app.route("/api/classes")

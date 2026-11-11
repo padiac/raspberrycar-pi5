@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 SUITES = ["test_layers.py", "test_tree.py", "test_link.py", "test_follow.py",
           "test_housekeeping.py", "test_vfh.py", "test_turning.py", "test_patrol.py", "test_hal.py",
           "test_estimator.py", "test_blob.py", "test_reacquire.py",
-          "test_aim.py", "test_telemetry.py",
+          "test_aim.py", "test_telemetry.py", "test_every_mode.py",
           "test_names.py", "test_architecture.py"]
 
 failed = []

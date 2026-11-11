@@ -142,6 +142,12 @@ class TreeBehavior:
     wants_detection = False
     #: A tree is always a mission: it has a goal and it finishes.
     category = "mission"
+    #: The control loop reads these two on every behaviour, every tick. This
+    #: class does not inherit from Behavior, so it never got them, and every
+    #: mission died on its first tick with an AttributeError. A mission drives
+    #: itself, so the speed slider governs it and nobody is steering it.
+    governed = True
+    hand_driven = False
 
     def __init__(self, name, label, root, description="", requires=(),
                  wants_detection=False, blackboard=None):

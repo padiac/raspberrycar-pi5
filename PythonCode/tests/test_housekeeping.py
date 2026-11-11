@@ -433,6 +433,20 @@ os.system("rm -rf " + shed)
 
 
 # =========================================================================
+print("\nevery behaviour has what the control loop reads from it")
+
+# The loop reads these from whatever is selected, every tick. Missions are
+# not subclasses of Behavior, so they missed the two added last and died on
+# their first tick -- which nothing caught until somebody pressed one.
+from behaviors import build_behaviors
+
+READ_BY_THE_LOOP = ("name", "label", "category", "requires", "wants_detection",
+                    "accepts_target", "governed", "hand_driven")
+for behaviour in build_behaviors(recorder=None).values():
+    missing = [a for a in READ_BY_THE_LOOP if not hasattr(behaviour, a)]
+    check("%s has %s" % (behaviour.name, "everything" if not missing
+                         else "no " + ", ".join(missing)), not missing)
+
 print("\n" + "=" * 62)
 if FAILS:
     print("FAILED %d of %d:" % (len(FAILS), len(FAILS) + len(PASSES)))

@@ -78,9 +78,13 @@ def build_fetch(target="person", arrive_fill=0.40, search_seconds=25):
         FollowBehavior(target=target),
         until=lambda ctx, b: (
             Status.SUCCESS if fills_frame(arrive_fill).check(ctx)
-            # Give up if it has been out of sight for a while; the tree, not
-            # the behaviour, decides that this counts as failure.
-            else Status.FAILURE if b.lost_frames > 25
+            # Give up once the follower itself has: it looks around for a lost
+            # target before conceding, and the tree, not the behaviour,
+            # decides that conceding counts as failure. This used to read a
+            # `lost_frames` counter the follower stopped having when it got a
+            # tracker, and the mission died with an AttributeError the first
+            # time it reached this leaf.
+            else Status.FAILURE if b.search.gave_up
             else None
         ),
         name="Approach target",
