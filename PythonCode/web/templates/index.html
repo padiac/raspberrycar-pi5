@@ -502,6 +502,101 @@
     .tel { grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); }
     .pad.two button.k { padding: 21px 0; }
   }
+  /* ── the three things most people want, right under the picture ── */
+  #modes { margin: 12px 0 16px; }
+  #modes .main { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  /* Sized to their words and stretched to fill each row, so no row ends
+     with one button stranded on its own. */
+  #modes .more { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  #modes .more button.opt { flex: 1 1 auto; white-space: nowrap; }
+  #modes .main button.opt { text-align: center; font-size: 16px; padding: 14px 8px; }
+  #modes .more button.opt { text-align: center; font-size: 13px; padding: 9px 8px; }
+  #modes .more button.opt small { display: none; }
+  #wake { position: absolute; inset: 0; display: grid; place-items: center;
+          pointer-events: auto; background: var(--video-bg); border: 0; cursor: pointer; }
+  #wake[hidden] { display: none; }
+  #wake span { font-size: 15px; font-weight: 650; color: #fff; padding: 12px 22px;
+               border-radius: 999px; background: var(--accent); box-shadow: var(--sh-md); }
+  /* ── the cockpit layout ──────────────────────────────────────────── */
+  body { max-width: 1240px; }
+  .cockpit { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(330px, 1fr);
+             gap: 16px; align-items: start; }
+  .side { display: flex; flex-direction: column; gap: 16px; }
+  .side .panel { margin-top: 0; }
+  .side .drive { grid-template-columns: 1fr auto; }
+  .side #wheels { width: 104px; height: 130px; }
+  .side input[type=range] { max-width: none; }
+  .switches { padding-top: 12px; border-top: 1px solid var(--line); margin-top: 14px !important; }
+  #modes { margin: 12px 0 0; }
+  #bstatus:empty { display: none; }
+  #safety { margin-top: 10px; }
+  /* The chip in the bar already says "safety ok"; the line only earns its
+     space when the layer is holding the car back or switched off. */
+  #safety:not(.active):not(.off) { display: none; }
+  #fan { display: block; width: 100%; height: auto; margin-top: 14px;
+         background: var(--sunken); border: 1px solid var(--line); border-radius: var(--r-sm); }
+  @media (max-width: 980px) {
+    .cockpit { grid-template-columns: 1fr; }
+    .side .drive { grid-template-columns: 1fr auto; }
+  }
+
+  @media (max-width: 700px) {
+    /* On a phone the columns dissolve into one stream, so the picture's
+       sticky positioning is relative to the page again and stays on screen
+       while the drive pad below it is in use. */
+    .cockpit, .look, .side { display: contents; }
+    .side .panel { margin-top: 16px; }
+    #modes .main button.opt small { display: none; }
+    #modes .main button.opt { padding: 13px 6px; }
+    /* One row of status. The keyboard reference is no use on a phone, the
+       moving chip says what the picture already shows, and "safety ok" only
+       needs saying when it is not. */
+    #help, #movechip { display: none; }
+    #safechip:not(.warn):not(.bad) { display: none; }
+  }
+  @media (max-width: 560px) {
+    /* The pad gets the whole width and square keys a thumb can find; the
+       wheel diagram is a nicety that would squeeze it. */
+    .side .drive { grid-template-columns: 1fr; }
+    .side #wheels { display: none; }
+    /* An auto margin on a grid item shrinks it to its content -- which was
+       three 36px keys in the middle of the card. */
+    #dirpad { width: 100%; }
+    .side .hint { display: none; }
+  }
+
+  .more-title { margin: 30px 2px 10px; font-size: 11px; font-weight: 700;
+                letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .folds { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; align-items: start; }
+  @media (max-width: 980px) { .folds { grid-template-columns: 1fr; } }
+  details.fold { padding: 0; margin-top: 0; overflow: hidden; }
+  details.fold > summary {
+    list-style: none; cursor: pointer; padding: 14px 18px; display: flex;
+    align-items: baseline; gap: 8px; font-size: 13px; font-weight: 650; user-select: none;
+  }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary em { font-style: normal; font-weight: 400; font-size: 12px; color: var(--dim);
+                              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  details.fold > summary::after {
+    content: ''; margin-left: auto; flex: none; width: 7px; height: 7px; align-self: center;
+    border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim);
+    transform: rotate(-45deg); transition: transform .15s;
+  }
+  details.fold[open] > summary::after { transform: rotate(45deg); }
+  details.fold > summary:hover { background: var(--sunken); }
+  details.fold > .body { padding: 2px 18px 18px; }
+
+  /* Loud on purpose: a class filter hides everything else the detector
+     sees, and nothing else on the page can explain that symptom. */
+  .warnbar {
+    background: var(--warn, #d2a106); color: #1a1a1a;
+    border-radius: 6px; padding: 7px 10px; margin-bottom: 10px;
+    font-size: 13px; line-height: 1.35;
+  }
+  .warnbar button {
+    margin-left: 8px; border: 0; border-radius: 4px; cursor: pointer;
+    background: #1a1a1a; color: #fff; padding: 3px 9px; font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -523,264 +618,246 @@
   <button id="estop">STOP</button>
 </div>
 
-<div id="stage">
-  <img id="view" src="/stream.mjpg" alt="camera stream">
-  <div class="hud tl"><span class="rec" id="hudlive">LIVE</span><span id="hudfps">-- fps</span></div>
-  <div class="hud tr"><span id="huddet" hidden>0 objects</span>
-    <button id="clipbtn" title="Record video">REC</button></div>
-  <div class="hud bl"><span id="hudhint" hidden>tap an object to track</span></div>
-  <div id="flash"><span></span></div>
-</div>
-
-<div class="panel">
-  <h2>Manual control <em id="dof"></em></h2>
-
-  <div class="drive">
-    <div class="pad" id="dirpad">
-      <button class="k" data-vx="1"  data-vy="-1" data-holo>↖</button>
-      <button class="k" data-vx="1">↑</button>
-      <button class="k" data-vx="1"  data-vy="1"  data-holo>↗</button>
-      <button class="k" data-vy="-1" data-holo>←</button>
-      <button class="k mini" data-vx="0" data-vy="0" data-om="0">stop</button>
-      <button class="k" data-vy="1"  data-holo>→</button>
-      <button class="k" data-vx="-1" data-vy="-1" data-holo>↙</button>
-      <button class="k" data-vx="-1">↓</button>
-      <button class="k" data-vx="-1" data-vy="1"  data-holo>↘</button>
+<!-- ── the cockpit: everything used every time, on one screen ──────────
+     Left: what the car sees and what it is doing. Right: what to follow
+     and how to drive it. Everything else is folded away further down. -->
+<main class="cockpit">
+  <section class="look">
+    <div id="stage">
+      <img id="view" src="/stream.mjpg" alt="camera stream">
+      <div class="hud tl"><span class="rec" id="hudlive">LIVE</span><span id="hudfps">-- fps</span></div>
+      <div class="hud tr"><span id="huddet" hidden>0 objects</span>
+        <button id="clipbtn" title="Record video">REC</button></div>
+      <div class="hud bl"><span id="hudhint" hidden></span></div>
+      <!-- A sleeping camera and a broken one look the same: black. So the black
+           picture itself says what it is and is the button that fixes it. -->
+      <button id="wake" hidden><span>Camera is off · tap here to turn it on</span></button>
+      <div id="flash"><span></span></div>
     </div>
-    <canvas id="wheels" width="240" height="300" title="live wheel speeds"></canvas>
-  </div>
 
-  <div class="pad two" style="margin-top:10px">
-    <button class="k" data-om="-1">↺ turn left</button>
-    <button class="k" data-om="1">turn right ↻</button>
-  </div>
+    <!-- The one place a mode is chosen. -->
+    <div id="modes">
+      <div id="behaviors"></div>
+      <div id="bstatus"></div>
+      <div id="safety">safety layer: idle</div>
+      <pre id="tree"></pre>
+    </div>
+  </section>
 
-  <div class="row" style="margin-top:14px">
-    <label>speed</label><span class="val" id="speedval">40%</span>
-    <!-- Starts low. The car is quick enough to pull its own USB lead out, and
-         a tethered first drive is the normal case, not the exception. -->
-    <input type="range" id="speed" min="5" max="100" value="40">
-  </div>
-  <div class="row">
-    <label>chassis</label>
-    <span id="dtpick"></span>
-  </div>
-  <div class="row" id="panrow" hidden>
-    <label>sensor aim</label><span class="val" id="panval">forward</span>
-    <input type="range" id="pan" min="-90" max="90" value="0" step="5">
-    <button class="toggle" id="pancentre">centre</button>
-  </div>
-  <div class="row" id="trimrow" hidden>
-    <label>aim trim</label><span class="val" id="trimval">0&deg;</span>
-    <input type="range" id="trim" min="-30" max="30" value="0" step="1">
-    <button class="toggle" id="panrev">--</button>
-  </div>
-  <p class="hint" id="panhint" hidden>The ultrasonic rides on a servo. A horn
-    only fits its spline every few degrees, so the trim is what makes the
-    middle of the slider actually point down the middle of the car -- aim at
-    something straight ahead and adjust until the range reading is at its
-    smallest. Driving forward is refused while the head is turned away, since
-    there is nothing watching where the car is going.</p>
-  <div class="row" style="margin-top:14px">
-    <button class="toggle" id="recbtn">● Record</button>
-    <button class="toggle" id="runbtn">▶ Replay</button>
-    <button class="toggle" id="clearbtn">Clear</button>
-    <span class="val" id="pathinfo" style="color:var(--muted);font-weight:500">no path</span>
-  </div>
-  <p class="hint" id="holohint"></p>
-  <p class="hint">Driving switches to Manual automatically. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · hold two keys for a diagonal · <kbd>space</kbd> stops.</p>
-</div>
+  <aside class="side">
+    <div class="panel">
+      <h2>Target <em>tap a box in the picture, or pick one here</em></h2>
+      <div id="classfilter" class="warnbar" style="display:none"></div>
+      <div id="objects"><span class="none">detection off</span></div>
+      <div class="row" style="margin-top:14px">
+        <input type="text" id="target" placeholder="or type one, e.g. bottle">
+        <button class="toggle" id="settarget">Track</button>
+      </div>
+      <div class="row">
+        <label>confidence</label><span class="val" id="confval">0.40</span>
+        <input type="range" id="conf" min="5" max="95" value="40">
+      </div>
+      <div class="row switches">
+        <button class="toggle on" id="cambtn">Camera</button>
+        <button class="toggle" id="detbtn">Detection</button>
+        <button class="toggle on" id="safebtn">Safety</button>
+      </div>
+    </div>
 
+    <div class="panel">
+      <h2>Drive <em id="dof"></em></h2>
+      <div class="drive">
+        <div class="pad" id="dirpad">
+          <button class="k" data-vx="1"  data-vy="-1" data-holo>↖</button>
+          <button class="k" data-vx="1">↑</button>
+          <button class="k" data-vx="1"  data-vy="1"  data-holo>↗</button>
+          <button class="k" data-vy="-1" data-holo>←</button>
+          <button class="k mini" data-vx="0" data-vy="0" data-om="0">stop</button>
+          <button class="k" data-vy="1"  data-holo>→</button>
+          <button class="k" data-vx="-1" data-vy="-1" data-holo>↙</button>
+          <button class="k" data-vx="-1">↓</button>
+          <button class="k" data-vx="-1" data-vy="1"  data-holo>↘</button>
+        </div>
+        <canvas id="wheels" width="240" height="300" title="live wheel speeds"></canvas>
+      </div>
+      <div class="pad two" style="margin-top:10px">
+        <button class="k" data-om="-1">↺ turn left</button>
+        <button class="k" data-om="1">turn right ↻</button>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <label>speed</label><span class="val" id="speedval">40%</span>
+        <!-- Starts low. The car is quick enough to pull its own USB lead out, and
+             a tethered first drive is the normal case, not the exception. -->
+        <input type="range" id="speed" min="5" max="100" value="40">
+      </div>
+      <p class="hint" id="holohint"></p>
+      <p class="hint">Keys: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive and turn · <kbd>Q</kbd><kbd>E</kbd> strafe · <kbd>space</kbd> stops. Driving switches to Manual by itself.</p>
+    </div>
+  </aside>
+</main>
 
-<div class="panel">
-  <h2>What it is doing</h2>
-  <div id="behaviors"></div>
-  <div id="bstatus"></div>
-  <div id="safety">safety layer: idle</div>
-  <pre id="tree"></pre>
-</div>
+<!-- ── everything else, folded until wanted ───────────────────────────── -->
+<h3 class="more-title">More</h3>
+<div class="folds">
 
-<div class="panel">
-  <h2>Reflexes <em>what it refuses to do</em></h2>
-  <div class="row">
-    <label>stop under</label><span class="val" id="stopval">20cm</span>
-    <input type="range" id="stopcm" min="5" max="60" value="20" step="1">
-  </div>
-  <div class="row">
-    <label>slow under</label><span class="val" id="slowval">40cm</span>
-    <input type="range" id="slowcm" min="10" max="200" value="40" step="5">
-  </div>
-  <div class="row">
-    <label>no echo</label>
-    <button class="toggle" id="noecho">--</button>
-    <span class="val" id="noechoval" style="color:var(--muted);font-weight:500"></span>
-  </div>
-  <div class="row">
-    <label>on contact</label>
-    <button class="toggle" id="bumpguard">--</button>
-    <span class="val" id="bumpstate" style="color:var(--muted);font-weight:500"></span>
-  </div>
-  <p class="hint">Stopping distance sets the first one, so it is not the knob
-    to turn when the car feels over-protective -- the second one is. Between
-    the two the car is throttled in proportion to the room left, which at
-    200cm means it is throttled all the time in an apartment and holding the
-    trigger down does nothing. No echo: the ping timing out means either an empty room or a pane
-    of glass, a wall met at an angle or a curtain, which all return exactly
-    what an empty room returns -- so creeping is the careful reading of it and
-    full speed is the useful one. On contact: a jolt the accelerometer felt
-    blocks forward travel for about a second. <em>auto</em> does that only
-    while a behaviour is driving, on the grounds that a person felt the same
-    collision themselves and does not need their controls frozen.</p>
-</div>
-
-<style>
-/* Loud on purpose. This hides the other seventy-nine classes, and the
-   reason it needs saying is that nothing else on the page can explain
-   the symptom: the detector is working, the confidence is fine, and the
-   thing in front of the camera is simply never reported. */
-.warnbar {
-  background: var(--warn, #d2a106); color: #1a1a1a;
-  border-radius: 6px; padding: 7px 10px; margin-bottom: 10px;
-  font-size: 13px; line-height: 1.35;
-}
-.warnbar button {
-  margin-left: 8px; border: 0; border-radius: 4px; cursor: pointer;
-  background: #1a1a1a; color: #fff; padding: 3px 9px; font-size: 12px;
-}
-</style>
-
-<div class="panel">
-  <h2>Seen right now <em>tap to track</em></h2>
-  <div id="classfilter" class="warnbar" style="display:none"></div>
-  <div id="objects"><span class="none">detection off</span></div>
-  <div class="row" style="margin-top:15px">
-    <button class="toggle on" id="cambtn">Camera</button>
-    <button class="toggle" id="detbtn">Detection</button>
-    <button class="toggle on" id="safebtn">Safety</button>
-  </div>
-  <div class="row">
-    <label>confidence</label><span class="val" id="confval">0.40</span>
-    <input type="range" id="conf" min="5" max="95" value="40" style="max-width:150px">
-  </div>
-  <div class="row">
-    <input type="text" id="target" placeholder="or type a target, e.g. bottle">
-    <button class="toggle" id="settarget">Track</button>
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Recordings <em id="clipfree"></em></h2>
-  <div class="row">
-    <button class="toggle" id="clipbtn2">● Record video</button>
-    <span class="val" id="clipinfo" style="color:var(--muted);font-weight:500">not recording</span>
-  </div>
-  <div id="cliplist"></div>
-  <p class="hint">H.264 in an MP4, 640 wide at 15fps -- perhaps a twentieth the
-    size of the stream you are watching, and it plays anywhere. It records what
-    is on screen, boxes and all. Recording stops on its own at 150MB or 15
-    minutes, so a forgotten one cannot fill the card.</p>
-</div>
-
-<div class="panel">
-  <h2>Inertial &amp; infrared</h2>
-  <div class="tel">
-    <div><span>Heading</span><b id="heading">--</b></div>
-    <div><span>Jolt</span><b id="jolt">--</b></div>
-    <div><span>IR left</span><b id="irl">--</b></div>
-    <div><span>IR right</span><b id="irr">--</b></div>
-  </div>
-  <div class="row" style="margin-top:14px">
-    <button class="toggle" id="zeroh">Zero the heading</button>
-    <button class="toggle" id="irtrust">--</button>
-  </div>
-  <p class="hint">Heading is integrated from the gyroscope, so it drifts a few
-    degrees a minute: good for one manoeuvre, useless as a compass. Zero it with
-    the car still. Jolt is the accelerometer noticing a collision &mdash; the bump
-    switch this car does not have, and the only thing aboard that can see glass
-    or a curtain. The infrared is reported but not acted on until you have
-    watched both sides change and said so, because an unwired pin sits at its
-    pull-up and reads exactly like a clear road.</p>
-</div>
-
-<div class="panel">
-  <h2>What it sees <em id="fanwhen"></em></h2>
-  <canvas id="fan" width="760" height="420"></canvas>
-  <p class="hint">Looking down on the car. The rangefinder measures one
-    direction at a time, so this is not a snapshot -- each wedge is the
-    last reading taken in that direction, and it fades as it ages, because
-    the car has moved since. Hollow wedges at the rim are directions where
-    the pulse went out and nothing came back: that is usually open floor,
-    and indoors it is just as often glass, a curtain or the side of a sofa,
-    which return exactly what an empty room returns. The red ring is where
-    forward motion is refused and the amber one where it starts being
-    throttled; the two dots are the corner infrared, which sees about eight
-    centimetres and lights up just before contact.</p>
-</div>
-
-<div class="panel">
-  <h2>Diagnostics</h2>
-  <div class="tel">
-    <div><span>Range</span><b id="range">--</b></div>
-    <div><span>Supply</span><b id="supply">--</b></div>
-    <div><span>Sensor aim</span><b id="panaim">--</b></div>
-    <div><span>vx fwd</span><b id="vx">0.00</b></div>
-    <div><span>vy strafe</span><b id="vy">0.00</b></div>
-    <div><span>ω turn</span><b id="om">0.00</b></div>
-    <div><span>Proximity</span><b id="prox">--</b></div>
-    <div><span>Floor</span><b id="floor">--</b></div>
-    <div><span>Stream</span><b id="sfps">--</b></div>
-    <div><span>Detect</span><b id="dfps">--</b></div>
-    <div><span>Gamepad</span><b id="gp">none</b></div>
-    <!-- Both of these exist because a fault was invisible until it was
-         counted. The servo twitching by itself once an hour was the ESP32
-         rebooting and re-centring the head; forty kilobytes of noise with no
-         newline in it was the boot ROM talking at another baud rate, and it
-         had quietly deafened the link. -->
-    <div><span>Board resets</span><b id="reboots">0</b></div>
-    <div><span>Line noise</span><b id="garbage">0</b></div>
-  </div>
-  <div class="row" style="margin-top:14px">
-    <button class="toggle danger" id="poweroff">⏻ Shut down the Pi</button>
-    <span class="val" id="powerinfo" style="color:var(--muted);font-weight:500">pulling the plug on a running Linux risks the SD card</span>
-  </div>
-  <canvas id="spark" width="800" height="92" title="range over the last 30 seconds"></canvas>
-  <p class="hint" id="hw"></p>
-</div>
-
-<div class="panel">
-  <h2>Settings <em id="setcount"></em></h2>
-  <details id="setbox">
-    <summary style="cursor:pointer;color:var(--muted);margin:8px 0">every tunable on the car</summary>
-    <div id="settings"></div>
+  <details class="panel fold" data-fold="sensors">
+    <summary>Sensors <em id="fanwhen"></em></summary>
+    <div class="body">
+      <div class="tel">
+        <div><span>Heading</span><b id="heading">--</b></div>
+        <div><span>Jolt</span><b id="jolt">--</b></div>
+        <div><span>IR left</span><b id="irl">--</b></div>
+        <div><span>IR right</span><b id="irr">--</b></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="toggle" id="zeroh">Zero the heading</button>
+        <button class="toggle" id="irtrust">--</button>
+      </div>
+      <canvas id="fan" width="760" height="420"></canvas>
+      <p class="hint">Looking down on the car. Each wedge is the last range
+        reading in that direction and fades as it ages; hollow wedges are
+        directions where nothing came back. Red ring: forward motion refused.
+        Amber: throttled. The two dots are the corner infrared.</p>
+      <p class="hint">Heading is integrated from the gyroscope and drifts a few
+        degrees a minute; zero it with the car still. Jolt is the accelerometer
+        noticing a collision. The infrared is not acted on until you have
+        watched both sides change and said so.</p>
+    </div>
   </details>
-  <p class="hint">One register for every number somebody might want to
-    change. The values live beside the code that explains them -- moving
-    them into a file of their own would leave the explanations orphaned --
-    and what is collected here is the declaration: what each one means,
-    what it is in, and what range is sane. Anything outside that range is
-    refused rather than quietly clamped. Measurements of this particular
-    machine are not here; they are facts rather than choices and live in
-    the calibration.</p>
-</div>
 
-<div class="panel">
-  <h2>Logs <em id="logfree"></em></h2>
-  <div class="row">
-    <button class="toggle" id="flight">flight recorder</button>
-    <button class="toggle" id="logsweep">sweep now</button>
-    <span class="val" id="logsize" style="color:var(--muted);font-weight:500"></span>
-  </div>
-  <details id="logbox">
-    <summary style="cursor:pointer;color:var(--muted);margin:8px 0">recent log</summary>
-    <pre id="logtail" style="max-height:260px;overflow:auto;font-size:11px"></pre>
+  <details class="panel fold" data-fold="path">
+    <summary>Path <em>record a drive, play it back</em></summary>
+    <div class="body">
+      <div class="row">
+        <button class="toggle" id="recbtn">● Record</button>
+        <button class="toggle" id="runbtn">▶ Replay</button>
+        <button class="toggle" id="clearbtn">Clear</button>
+        <span class="val" id="pathinfo" style="color:var(--muted);font-weight:500">no path</span>
+      </div>
+    </div>
   </details>
-  <p class="hint">Rotating files with a fixed ceiling, so the card cannot be
-    filled even if nobody ever sweeps. The flight recorder adds a row of
-    machine-readable state a few times a second, but only when something
-    changed -- standing still costs almost nothing, and the interesting
-    seconds come out dense. Worth turning on before a patrol run and off
-    afterwards. These survive a reboot, which the system journal on this Pi
-    does not.</p>
+
+  <details class="panel fold" data-fold="reflexes">
+    <summary>Reflexes <em>what it refuses to do</em></summary>
+    <div class="body">
+      <div class="row">
+        <label>stop under</label><span class="val" id="stopval">20cm</span>
+        <input type="range" id="stopcm" min="5" max="60" value="20" step="1">
+      </div>
+      <div class="row">
+        <label>slow under</label><span class="val" id="slowval">40cm</span>
+        <input type="range" id="slowcm" min="10" max="200" value="40" step="5">
+      </div>
+      <div class="row">
+        <label>no echo</label>
+        <button class="toggle" id="noecho">--</button>
+        <span class="val" id="noechoval" style="color:var(--muted);font-weight:500"></span>
+      </div>
+      <div class="row">
+        <label>on contact</label>
+        <button class="toggle" id="bumpguard">--</button>
+        <span class="val" id="bumpstate" style="color:var(--muted);font-weight:500"></span>
+      </div>
+      <p class="hint">Stop under is a hard stop; slow under throttles in
+        proportion to the room left, and is the one to lower when the car feels
+        over-protective. No echo: a timed-out ping can be an empty room or glass,
+        a curtain, a wall at an angle. On contact: a jolt blocks forward travel
+        for about a second; <em>auto</em> only while a behaviour is driving.</p>
+    </div>
+  </details>
+
+  <details class="panel fold" data-fold="chassis">
+    <summary>Chassis &amp; sensor aim</summary>
+    <div class="body">
+      <div class="row">
+        <label>chassis</label>
+        <span id="dtpick"></span>
+      </div>
+      <div class="row" id="panrow" hidden>
+        <label>sensor aim</label><span class="val" id="panval">forward</span>
+        <input type="range" id="pan" min="-90" max="90" value="0" step="5">
+        <button class="toggle" id="pancentre">centre</button>
+      </div>
+      <div class="row" id="trimrow" hidden>
+        <label>aim trim</label><span class="val" id="trimval">0&deg;</span>
+        <input type="range" id="trim" min="-30" max="30" value="0" step="1">
+        <button class="toggle" id="panrev">--</button>
+      </div>
+      <p class="hint" id="panhint" hidden>The ultrasonic rides on a servo. Aim
+        at something straight ahead and adjust the trim until the range reading
+        is at its smallest. Driving forward is refused while the head is turned
+        away.</p>
+    </div>
+  </details>
+
+  <details class="panel fold" data-fold="recordings">
+    <summary>Recordings <em id="clipfree"></em></summary>
+    <div class="body">
+      <div class="row">
+        <button class="toggle" id="clipbtn2">● Record video</button>
+        <span class="val" id="clipinfo" style="color:var(--muted);font-weight:500">not recording</span>
+      </div>
+      <div id="cliplist"></div>
+      <p class="hint">MP4, 640 wide at 15fps, boxes and all. Stops on its own at
+        150MB or 15 minutes.</p>
+    </div>
+  </details>
+
+  <details class="panel fold" data-fold="diagnostics">
+    <summary>Diagnostics</summary>
+    <div class="body">
+      <div class="tel">
+        <div><span>Range</span><b id="range">--</b></div>
+        <div><span>Supply</span><b id="supply">--</b></div>
+        <div><span>Sensor aim</span><b id="panaim">--</b></div>
+        <div><span>vx fwd</span><b id="vx">0.00</b></div>
+        <div><span>vy strafe</span><b id="vy">0.00</b></div>
+        <div><span>ω turn</span><b id="om">0.00</b></div>
+        <div><span>Proximity</span><b id="prox">--</b></div>
+        <div><span>Floor</span><b id="floor">--</b></div>
+        <div><span>Stream</span><b id="sfps">--</b></div>
+        <div><span>Detect</span><b id="dfps">--</b></div>
+        <div><span>Gamepad</span><b id="gp">none</b></div>
+        <!-- Both of these exist because a fault was invisible until it was
+             counted: the ESP32 rebooting, and the boot ROM's noise deafening
+             the link. -->
+        <div><span>Board resets</span><b id="reboots">0</b></div>
+        <div><span>Line noise</span><b id="garbage">0</b></div>
+      </div>
+      <canvas id="spark" width="800" height="92" title="range over the last 30 seconds"></canvas>
+      <p class="hint" id="hw"></p>
+      <div class="row" style="margin-top:14px">
+        <button class="toggle danger" id="poweroff">⏻ Shut down the Pi</button>
+        <span class="val" id="powerinfo" style="color:var(--muted);font-weight:500">pulling the plug on a running Linux risks the SD card</span>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel fold" id="setbox" data-fold="settings">
+    <summary>Settings <em id="setcount"></em></summary>
+    <div class="body">
+      <div id="settings"></div>
+      <p class="hint">Every tunable on the car, with what it means and what range
+        is sane. Anything outside that range is refused rather than clamped.
+        Measurements of this machine live in the calibration, not here.</p>
+    </div>
+  </details>
+
+  <details class="panel fold" id="logbox" data-fold="logs">
+    <summary>Logs <em id="logfree"></em></summary>
+    <div class="body">
+      <div class="row">
+        <button class="toggle" id="flight">flight recorder</button>
+        <button class="toggle" id="logsweep">sweep now</button>
+        <span class="val" id="logsize" style="color:var(--muted);font-weight:500"></span>
+      </div>
+      <pre id="logtail" style="max-height:260px;overflow:auto;font-size:11px"></pre>
+      <p class="hint">Rotating files with a fixed ceiling. The flight recorder
+        adds a row of state a few times a second when something changed; worth
+        turning on before a run. These survive a reboot.</p>
+    </div>
+  </details>
+
 </div>
 
 <!-- Before the script, not after it. Everything below runs the moment it
@@ -970,44 +1047,75 @@ $('target').addEventListener('keydown', e => {
   e.stopPropagation();
 });
 
-// ---- behaviours, grouped by kind ----------------------------------------
-const GROUPS = [
-  ['control', 'Control',  'always available'],
-  ['skill',   'Skills',   'one capability, runs until you stop it'],
-  ['mission', 'Missions', 'a task with a goal — succeeds or fails'],
-];
+// ---- modes: one row of three, then everything else ------------------------
+const MAIN = {
+  idle:   ['Stop',   'the car stays still'],
+  manual: ['Manual', 'drive with the arrows below'],
+  follow: ['Follow', 'tap a box in the picture first'],
+};
+const ORDER = ['idle', 'manual', 'follow'];
 
 async function loadBehaviors() {
   try {
     const d = await (await fetch('/api/behaviors')).json();
-    const box = $('behaviors');
-    box.innerHTML = '';
-    GROUPS.forEach(([key, title, note]) => {
-      const items = d.behaviors.filter(b => (b.category || 'skill') === key);
-      if (!items.length) return;
-      const group = document.createElement('div');
-      group.className = 'group';
-      group.innerHTML = '<h3>' + title + '<em>' + note + '</em></h3>';
-      const grid = document.createElement('div');
-      grid.className = 'grid';
-      items.forEach(b => {
-        const el = document.createElement('button');
-        el.className = 'opt' + (b.active ? ' active' : '');
-        el.innerHTML = esc(b.label) + '<small>' +
-          esc(b.missing.length ? 'needs ' + b.missing.join(', ') : b.description) + '</small>';
-        el.disabled = b.missing.length > 0;
-        el.onclick = async () => {
-          const res = await post('/api/behavior', {name: b.name});
-          if (res && res.error) { $('bstatus').textContent = res.error; $('bstatus').className = 'err'; }
-          loadBehaviors();
-        };
-        grid.appendChild(el);
-      });
-      group.appendChild(grid);
-      box.appendChild(group);
+    const main = document.createElement('div'); main.className = 'main';
+    const more = document.createElement('div'); more.className = 'more';
+    const rank = b => { const i = ORDER.indexOf(b.name); return i < 0 ? 99 : i; };
+    [...d.behaviors].sort((a, b) => rank(a) - rank(b)).forEach(b => {
+      const el = document.createElement('button');
+      el.className = 'opt' + (b.active ? ' active' : '');
+      el.id = 'mode-' + b.name;
+      el.title = b.description;
+      const [title, note] = MAIN[b.name] || [b.label, b.description];
+      el.innerHTML = esc(title) + '<small' + (b.name === 'follow' ? ' id="followwhat"' : '') + '>' +
+        esc(b.missing.length ? 'needs ' + b.missing.join(', ') : note) + '</small>';
+      el.disabled = b.missing.length > 0;
+      el.onclick = b.name === 'follow' ? followPicked : async () => {
+        const res = await post('/api/behavior', {name: b.name});
+        if (res && res.error) { $('bstatus').textContent = res.error; $('bstatus').className = 'err'; }
+        loadBehaviors();
+      };
+      (MAIN[b.name] ? main : more).appendChild(el);
     });
+    $('behaviors').replaceChildren(main, more);
+    if (lastSeen) renderModes(lastSeen);
   } catch (e) { pulse.className = 'dead'; }
 }
+
+// ---- stop / manual / follow ---------------------------------------------
+// The last thing followed, so "follow" can be pressed again after a stop
+// without hunting for the box. Failing that, the only thing in view.
+let lastTarget = null, lastSeen = null;
+function renderModes(d) {
+  lastSeen = d;
+  document.querySelectorAll('#behaviors button.opt').forEach(el =>
+    el.classList.toggle('active', el.id === 'mode-' + d.behavior));
+  if (currentTarget) lastTarget = currentTarget;
+  const labels = [...new Set(detections.map(o => o.label))];
+  const pick = lastTarget || (labels.length === 1 ? labels[0] : null);
+  if ($('mode-follow')) $('mode-follow').dataset.pick = pick || '';
+  if ($('followwhat')) $('followwhat').textContent =
+    d.behavior === 'follow' && currentTarget ? 'following ' + currentTarget
+    : pick ? 'follow ' + pick : 'tap a box in the picture first';
+
+  let hint = '';
+  if (!d.camera_enabled) hint = '';
+  else if (d.behavior === 'follow' && currentTarget)
+    hint = 'Following ' + currentTarget + ' · press Stop to end';
+  else if (detections.length) hint = 'Tap a box and the car follows it';
+  else if (d.detect_enabled) hint = 'Nothing recognised in view';
+  $('hudhint').textContent = hint;
+  $('hudhint').hidden = !hint;
+  $('wake').hidden = !!d.camera_enabled;
+}
+function followPicked() {
+  const pick = $('mode-follow').dataset.pick;
+  if (pick) track(pick); else flash('Tap a box in the picture first');
+}
+$('wake').onclick = async () => {
+  const r = await post('/api/camera', {enabled: true});
+  if (r && !r.error) { applyCamera(true); flash('Turning the camera on…'); }
+};
 
 // ---- toggles ------------------------------------------------------------
 function applyCamera(on) { cameraOn = on; $('cambtn').classList.toggle('on', on); }
@@ -1634,8 +1742,11 @@ async function telemetry() {
     pulse.className = 'live';
 
     // status bar
-    $('statename').textContent = d.behavior_label;
     const st = d.behavior_status || {};
+    $('statename').textContent = d.behavior === 'idle' ? 'Stopped'
+      : d.behavior === 'manual' ? 'Manual'
+      : d.behavior === 'follow' ? 'Following ' + (st.target || '')
+      : d.behavior_label;
     $('substate').textContent = d.behavior_error || st.state || st.path || st.reason || '';
     currentTarget = st.target || null;
 
@@ -1653,8 +1764,9 @@ async function telemetry() {
     if (d.behavior !== activeBehavior) { activeBehavior = d.behavior; loadBehaviors(); }
     if (d.behavior_error) { $('bstatus').textContent = d.behavior_error; $('bstatus').className = 'err'; }
     else {
-      $('bstatus').textContent = Object.entries(st).filter(([k]) => k !== 'tree')
-        .map(([k, v]) => k + ': ' + v).join('   ·   ');
+      // What it is doing is already in the status bar; this line is only
+      // for something going wrong.
+      $('bstatus').textContent = '';
       $('bstatus').className = '';
     }
     $('tree').innerHTML = st.tree ? renderTree(st.tree) : '';
@@ -1713,7 +1825,7 @@ async function telemetry() {
     $('hudfps').textContent = (d.stream_fps || '--') + ' fps';
     $('huddet').hidden = !d.detect_enabled;
     $('huddet').textContent = detections.length + (detections.length === 1 ? ' object' : ' objects');
-    $('hudhint').hidden = !detections.length;
+    renderModes(d);
 
     renderObjects(d);
 
@@ -1984,6 +2096,14 @@ addEventListener('keydown', e => {
 });
 
 setInterval(telemetry, 500);
+// ---- folds remember whether they were open ------------------------------
+document.querySelectorAll('details.fold').forEach(d => {
+  const key = 'fold.' + d.dataset.fold;
+  try { if (localStorage.getItem(key) === '1') d.open = true; } catch (e) {}
+  d.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, d.open ? '1' : '0'); } catch (e) {}
+  });
+});
 </script>
 </body>
 </html>

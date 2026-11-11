@@ -512,6 +512,21 @@ class FollowBehavior(Behavior):
             else None,
             world.dt)
 
+        fill = self.track.size.value
+        why_not = "off to one side" if not ahead else "no echo"
+        if (measured is not None and fill is not None
+                and measured > self.standoff_cm + CHASE.distance_deadband_cm
+                and fill >= CHASE.target_fill - CHASE.fill_deadband):
+            # The rangefinder says far, the camera says it already fills
+            # the picture. Then the echo is not off the target. Measured on
+            # the car with the black ball: the ultrasonic sits above it,
+            # its beam passes over a ball on the floor, and it read the sofa
+            # at 190cm -- so the car drove flat out at a ball 40cm away and
+            # ran it out of the bottom of the picture. Something small on
+            # the floor is the normal case for this car, not an odd one.
+            measured = None
+            why_not = "echo is past it"
+
         vx = 0.0
         if measured is not None:
             # PID error is (setpoint - measured), which goes negative when the
@@ -526,15 +541,13 @@ class FollowBehavior(Behavior):
             # estimate is worse, and worse is not nothing -- which is a change
             # from the old behaviour, where being off to one side meant not
             # moving at all and produced the stop-start.
-            fill = self.track.size.value
             if fill is None:
                 how = "no size yet"
             else:
                 if abs(CHASE.target_fill - fill) > CHASE.fill_deadband:
                     vx = self.forward_pid.update(
                         fill, world.dt, rate=self.track.size.rate)
-                how = ("fill %.2f (%s)"
-                       % (fill, "off to one side" if not ahead else "no echo"))
+                how = "fill %.2f (%s)" % (fill, why_not)
 
         # Approach along the line of sight rather than across it. A slope,
         # not the cliff this used to be.

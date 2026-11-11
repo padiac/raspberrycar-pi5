@@ -396,6 +396,16 @@ edge = follower().update(
 check("  but not at a target near the edge, where it looks smaller than it is",
       edge.vx, 0.0)
 
+# The ball sits under the ultrasonic's beam, which reads the wall behind.
+from behaviors.follow import CHASE as _C                        # noqa: E402
+looming = follower().update(
+    FlooredRobot(), world(fill=_C.target_fill, range_cm=190.0))
+check("an echo far behind a target that already fills the picture is "
+      "not believed", looming.vx, 0.0)
+small = follower().update(
+    FlooredRobot(), world(fill=0.10, range_cm=190.0))
+check_sign("  but a far echo and a small target still mean go", small.vx, +1)
+
 steady = follower()
 for _ in range(5):
     steady.update(FakeRobot(), world(range_cm=STANDOFF_CM))
