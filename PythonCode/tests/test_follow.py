@@ -43,7 +43,17 @@ def check_sign(name, value, sign):
 
 
 class FakeRobot:
-    """Everything FollowBehavior touches on a robot, which is nothing."""
+    """Everything FollowBehavior touches on a robot.
+
+    `enough_to_turn` is the real one's arithmetic for lifting a turn back
+    over the floor the governor scales it under. The identity here is
+    deliberate: these checks are about what the follower decides, and a
+    stand-in that silently changed the magnitudes would make every
+    command in them a different number from the one being reasoned about.
+    """
+
+    def enough_to_turn(self, magnitude):
+        return magnitude
 
 
 def world(offset=0.0, fill=0.30, range_cm=None, range_forward=True):
@@ -61,8 +71,20 @@ def world(offset=0.0, fill=0.30, range_cm=None, range_forward=True):
     )
 
 
+from behaviors.reacquire import Reacquire                    # noqa: E402
+
+#: Explicit, so that switching the search off on the car -- which is a
+#: perfectly reasonable thing for its owner to do -- does not quietly
+#: change what these checks are checking.
+SEARCH_TUNING = dict(enabled=True, patience_s=6.0, sweep_degrees=70.0,
+                     dwell_s=0.4, opening_rate=45.0, sweep_period_s=2.4,
+                     effort=0.45, gain=0.02, blind_rate=0.30,
+                     divergence_ticks=6, runaway_factor=1.5)
+
+
 def follower():
     behaviour = FollowBehavior(target="bottle")
+    behaviour.search = Reacquire(**SEARCH_TUNING)
     behaviour.start(FakeRobot())
     return behaviour
 
@@ -150,7 +172,20 @@ empty = WorldState(dt=0.05, frame_size=(WIDTH, HEIGHT), detections=[],
                    range_cm=100.0, range_expected=True)
 behaviour = follower()
 out = behaviour.update(FakeRobot(), empty)
-check("no target: stopped", (out.vx, out.vy, out.omega), (0.0, 0.0, 0.0))
+# Told to follow something and no sign of it: it goes and looks, rather
+# than sitting still. A ball at the very edge of the picture is a sliver
+# too clipped to be acquired, which is exactly the case worth turning
+# towards, and the car used to wait for it indefinitely.
+check("nothing in view: it looks for it rather than waiting",
+      (out.vx, out.vy), (0.0, 0.0))
+check("  by turning", abs(out.omega) > 0.0, True)
+
+# ...once. The end of one search must not be the start of the next, or
+# the car turns until somebody switches it off.
+for _ in range(400):
+    out = behaviour.update(FakeRobot(), empty)
+check("  and gives up rather than looking for ever",
+      (out.vx, out.vy, out.omega), (0.0, 0.0, 0.0))
 
 blind = WorldState(dt=0.05, frame_size=(0, 0))
 check("no camera: stopped", follower().update(FakeRobot(), blind).moving, False)
@@ -189,7 +224,8 @@ for step in range(6):
 moving_left = WorldState(dt=0.05, frame_size=(WIDTH, HEIGHT), detections=[],
                          range_cm=STANDOFF_CM, range_expected=True)
 coasting = blinking.update(FakeRobot(), moving_left)
-check("one missed look does not stop the turn", abs(coasting.omega) > 0.01, True)
+check("a step already under way is not interrupted by a missed look",
+      abs(coasting.omega) > 0.01 or not blinking.aim.stepping, True)
 check("  but it does stop driving at something nobody can see",
       coasting.vx, 0.0)
 check("  and it says so", "coasting" in blinking.status()["state"], True)
@@ -200,6 +236,45 @@ for _ in range(40):
     gone.update(FakeRobot(), moving_left)
 check("a target that never comes back is given up", gone.track.alive, False)
 check("  and not remembered as a stale guess", gone.track.offset, None)
+
+
+print()
+print("the turn has to survive the governor")
+
+# The aim commands the measured floor, below which these motors do not
+# rotate the chassis at all. The governor then scales whatever a
+# behaviour asks for by the speed limit, which at 0.4 turns that floor
+# into 0.08 and the car into an ornament -- observed as a step counter
+# climbing from 1 to 9 over nine seconds with the gyro motionless.
+#
+# Robot.enough_to_turn undoes that and exists for it. What is checked
+# here is only that the follower asks, because what the answer should be
+# is the robot's arithmetic and is tested where it lives.
+class CountingRobot(FakeRobot):
+    asked = []
+
+    def enough_to_turn(self, magnitude):
+        CountingRobot.asked.append(magnitude)
+        return magnitude
+
+
+CountingRobot.asked = []
+lifting = follower()
+# Far enough off centre that a step is worth taking at all.
+for _ in range(3):
+    lifting.update(CountingRobot(), world(offset=+0.85, range_cm=STANDOFF_CM))
+check("a commanded turn is put back over the floor the governor scales "
+      "it under", len(CountingRobot.asked) > 0, True)
+check("  and what is handed over is a magnitude, not a signed command",
+      all(value >= 0 for value in CountingRobot.asked), True)
+
+# A tick that commands nothing must not ask, or the floor would
+# manufacture a turn out of a decision to stay still.
+CountingRobot.asked = []
+still = follower()
+still.update(CountingRobot(), world(offset=0.0, range_cm=STANDOFF_CM))
+check("  but a tick that wants no turn does not ask for one",
+      CountingRobot.asked, [])
 
 
 print()

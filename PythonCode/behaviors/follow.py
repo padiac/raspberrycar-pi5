@@ -56,9 +56,11 @@ its own prediction through the frames where the detector blinks.
 
 from settings import Spec, group
 
+import time
+
 import cv2
 
-from control import PID, TargetTrack
+from control import Aim, PID, TargetTrack
 from hal import Velocity
 
 from .base import Behavior
@@ -104,18 +106,39 @@ AHEAD_DEADBAND = 0.25
 #: buy by refusing outright.
 APPROACH_FALLOFF = 1.0
 
-#: Steering gains. Proportional to where the target is, derivative on how
-#: fast it is crossing the frame.
+#: How far off centre is worth a step, in degrees.
 #:
-#: The derivative gain reads very differently now and the old number would
-#: be wrong. It used to multiply a frame-to-frame difference already divided
-#: by dt, so its effective size was kd/dt -- 0.3/0.05, an effective gain of
-#: six against a proportional gain of 1.6. Here it multiplies a velocity
-#: estimated from the whole history, in half-frame-widths per second, so it
-#: means what it says: a target crossing the frame at one half-width a
-#: second adds this much steering to meet it.
-TURN_KP = 1.6
-TURN_KD = 0.25
+#: Not a tuning knob. It is the scatter on the smallest move this chassis
+#: can make, and a loop whose deadband is narrower than that scatter will
+#: hunt at any gain, because it is correcting errors it cannot make and
+#: then correcting its failure to make them.
+#:
+#: Measured today:
+#:
+#:     one control tick, 17.7Hz at 30 deg/s        1.7 deg
+#:     coast after a braked step, median           3.7 deg
+#:     smallest stop-to-stop move                 ~5.4 deg
+#:     that coast across sixteen runs       -0.9 .. 8.3 deg
+#:
+#: So the scatter is about plus or minus 4.6 degrees and the deadband has
+#: to clear it. At 7 degrees -- 56% of this camera's 12.5 degree half
+#: field -- an overshoot lands inside the band and the car stops, which
+#: is the whole point: overshoot only matters if you then correct it.
+#:
+#: The job this serves is keeping the ball in the middle of the picture,
+#: not in the middle of the picture to within a degree. Somebody with the
+#: remote control does the first perfectly well and has never attempted
+#: the second. If 7 degrees looks loose on the video, that is what a
+#: controller that is not fighting its own actuator looks like.
+AIM_DEADBAND_DEG = 7.0
+
+#: How far ahead of a moving target to aim, in seconds.
+#:
+#: A step takes a tenth of a second and the look after it another fifth,
+#: so a target that is moving will not be where it was by the time the car
+#: gets there. The velocity comes from the estimator, which carries it as
+#: state -- the reason it is there at all.
+LOOK_AHEAD_S = 0.3
 
 MAX_FORWARD = 0.6
 MAX_TURN = 0.8
@@ -154,15 +177,15 @@ CHASE = group(
         help='How much approach speed is given up for being off centre. '
              'Zero drives at full speed whatever the bearing; one gives up '
              'all of it at the frame edge; higher turns more before moving.'),
-    turn_kp=Spec(
-        TURN_KP, unit='', bounds=(0.0, 10.0),
-        help='Steering response to where the target is.'),
-    turn_kd=Spec(
-        TURN_KD, unit='', bounds=(0.0, 5.0),
-        help='Steering response to how fast the target is crossing the '
-             'frame. Damps the swing on the way in and leads a moving '
-             'target. Raise it if the car overshoots and comes back; lower '
-             'it if the car twitches.'),
+    aim_deadband_deg=Spec(
+        AIM_DEADBAND_DEG, unit='deg', bounds=(0.2, 45.0),
+        help='How far off centre the target must be before the car turns '
+             'at all. Below roughly one step there is nothing it can do '
+             'about the difference, and trying is how it hunts.'),
+    look_ahead_s=Spec(
+        LOOK_AHEAD_S, unit='s', bounds=(0.0, 2.0),
+        help='How far ahead of a moving target to aim, to allow for the '
+             'step and the look after it. Zero aims at where it was.'),
     max_forward=Spec(
         MAX_FORWARD, unit='', bounds=(0.0, 1.0),
         help='Fastest it will chase.'),
@@ -196,11 +219,11 @@ class FollowBehavior(Behavior):
         #: they changed for the next.
         self._standoff_override = None
 
-        #: Steering gains live on the PID but are read from the register at
-        #: every tick, so turning the knob on the page takes effect without
-        #: a restart -- which is the only way tuning a control loop by feel
-        #: is bearable.
-        self.turn_pid = PID(kp=CHASE.turn_kp, kd=CHASE.turn_kd, setpoint=0.0)
+        #: Built in start(), where the robot -- and so the calibration --
+        #: is in reach. A behaviour is constructed long before it is given
+        #: a car.
+        self.aim = None
+        self.half_fov = None
         #: Gain is per centimetre: 35cm too far asks for 0.7, which the clamp
         #: below brings to CHASE.max_forward.
         self.distance_pid = PID(kp=0.02, kd=0.005, setpoint=CHASE.standoff_cm)
@@ -252,9 +275,45 @@ class FollowBehavior(Behavior):
         self.track = self._new_track()
         self.search.found()
         self._seen_at = 0.0
-        self.turn_pid.reset()
+        if self.aim is not None:
+            self.aim.forget()
         self.distance_pid.reset()
         self.forward_pid.reset()
+
+    def _measure(self, robot):
+        """Read what was measured about this car's camera and chassis."""
+        calibration = getattr(robot, "calibration", None)
+        self.half_fov = calibration.get("camera_half_fov_deg") if calibration else None
+        rate = calibration.get("turn_rate_deg_s") if calibration else None
+        coast = calibration.get("turn_coast_deg") if calibration else None
+        self.aim = Aim(rate, coast_deg=coast or 0.0)
+
+    def _step_for(self, offset):
+        """How far to turn for a target this far across the picture.
+
+        Returns (degrees, worth_doing).
+
+        With the camera measured, the error is an angle and the question
+        is whether that angle is bigger than the smallest turn this car
+        can make. Without it the error cannot be put in degrees at all --
+        the two common lenses for this sensor differ by a factor of two
+        and a half, and this car's is neither, so there is no honest
+        default -- and the judgement has to happen where it can, in the
+        picture, with the car creeping in minimum steps.
+
+        The first version of this compared a creep step against a deadband
+        in degrees. The step was smaller than the deadband, so no step was
+        ever requested and an uncalibrated car sat perfectly still while
+        believing it was following something.
+        """
+        if self.half_fov:
+            degrees = offset * self.half_fov
+            return degrees, abs(degrees) >= CHASE.aim_deadband_deg
+
+        # A step big enough to be worth taking, judged in the picture.
+        nudge = (self.aim.smallest_deg * 1.6) if self.aim else 2.5
+        return (nudge if offset > 0 else -nudge,
+                abs(offset) > CHASE.centre_deadband)
 
     @property
     def box(self):
@@ -263,6 +322,7 @@ class FollowBehavior(Behavior):
         return self.track.box
 
     def start(self, robot):
+        self._measure(robot)
         self._reset()
         self.state = "waiting"
 
@@ -276,13 +336,12 @@ class FollowBehavior(Behavior):
             self.state = "no camera"
             return Velocity.STOP
 
-        # Live gains and live setpoints, so the page can tune the loop
-        # while it runs. All of them, not the two that were easiest: a
-        # promise of live tuning that holds for half the knobs is worse
-        # than none, because the half that does not work looks like a
-        # control loop that ignores its settings.
-        self.turn_pid.kp = CHASE.turn_kp
-        self.turn_pid.kd = CHASE.turn_kd
+        if self.aim is None:
+            # update() without start(), which happens in tests and would
+            # otherwise mean no steering at all rather than a loud failure.
+            self._measure(robot)
+
+        # Live setpoints, so the page can tune the loop while it runs.
         self.distance_pid.setpoint = self.standoff_cm
         self.forward_pid.setpoint = CHASE.target_fill
 
@@ -297,7 +356,27 @@ class FollowBehavior(Behavior):
 
         if not self.track.alive:
             # Either never seen, or coasted for longer than it is worth.
-            if self.track.seen > 0:
+            if (self.track.seen == 0 and not self.search.searching
+                    and not self.search.gave_up):
+                # Told to follow something and no sign of it. The search
+                # was written for targets that had been lost and was
+                # never offered one that had not yet been found, so a car
+                # started with the ball at the edge of the picture -- a
+                # sliver too clipped to be acquired, which is exactly the
+                # case worth turning towards -- sat still indefinitely.
+                #
+                # No bias either way: there is no last sighting to lean
+                # on, so it opens out from where it is standing.
+                #
+                # Once, not for ever. Without the gave_up guard the end
+                # of one search is immediately the start of the next --
+                # the target has still never been seen, so the condition
+                # above is still true -- and the car turns until somebody
+                # switches it off. `found()` clears the flag, so a target
+                # that turns up later is chased normally.
+                self.search.lost(0.0, 0.0, world.turned,
+                                 world.turn_rate is not None)
+            elif self.track.seen > 0:
                 # It was there a moment ago, and the commonest reason it is
                 # not there now is that this car turned away from it. Start
                 # a search anchored on the heading it was last seen from,
@@ -320,7 +399,9 @@ class FollowBehavior(Behavior):
                               if self.search.gave_up
                               else f"no {self.target} in view")
                 return Velocity.STOP
-            self.state = self.search.describe(self.target)
+            self.state = (self.search.describe(self.target)
+                          if self.track.seen > 0 or self.search.searching
+                          else f"no {self.target} in view")
             # Camera only. Driving towards something nobody can currently
             # see is a different and much worse idea than looking for it.
             return Velocity(omega=turning)
@@ -329,15 +410,43 @@ class FollowBehavior(Behavior):
         offset = self.track.offset
         drift = self.track.drift
 
-        # -- turn: drive the horizontal offset to zero ----------------------
-        omega = 0.0
-        if abs(offset) > CHASE.centre_deadband:
-            # PID error is (setpoint - measured) = -offset, so a target to the
-            # right gives a negative output; flip it back to "turn right".
-            # The rate comes from the track's own state rather than from
-            # subtracting two sightings -- see PID.update().
-            omega = -self.turn_pid.update(offset, world.dt, rate=drift)
-            omega = max(-CHASE.max_turn, min(CHASE.max_turn, omega))
+        # -- turn: step towards it, then stop and look ---------------------
+        #
+        # Not a continuous command any more. Measured on this car with the
+        # ball in front of it: the smallest turn it can make is 1.7
+        # degrees, it turns at 46 degrees a second once moving, and the
+        # camera sees 16 degrees either side of the nose. A ball a quarter
+        # of the way to the edge is four degrees off, which the car covers
+        # in under a tenth of a second -- less time than the camera, the
+        # detector and this loop take to notice. Feedback that arrives
+        # describing more rotation than the error it was correcting makes
+        # a loop that oscillates at any gain, which is why nothing done to
+        # the gains helped and why this was never a tuning problem.
+        now = time.monotonic()
+        if self.aim.ready(now) and self.track.fresh:
+            # Aim where it will be, not where it was: a step and the look
+            # after it take half a second, and the velocity is already
+            # carried by the estimator.
+            ahead = offset + drift * CHASE.look_ahead_s
+            degrees, worth_doing = self._step_for(ahead)
+            if worth_doing:
+                self.aim.request(degrees, world.turned, now)
+        omega = self.aim.omega(now, world.turned)
+        if omega:
+            # The aim commands the measured floor, below which these
+            # motors do not rotate the chassis at all -- and then the
+            # governor scales whatever a behaviour asks for by the speed
+            # limit, which at 0.4 turns that floor into 0.08 and the car
+            # into an ornament. The trace of this showed the step counter
+            # climbing from 1 to 9 over nine seconds with the gyro
+            # motionless at -2.6 degrees.
+            #
+            # Robot.enough_to_turn does the arithmetic that undoes it,
+            # and exists for this: patrol calls it, manual driving calls
+            # it, and this never has.
+            lifted = robot.enough_to_turn(abs(omega))
+            omega = lifted if omega > 0 else -lifted
+        omega = max(-CHASE.max_turn, min(CHASE.max_turn, omega))
 
         # -- drive: hold a real distance, and fall back to apparent size ----
         ahead = abs(offset) < CHASE.ahead_deadband
@@ -437,4 +546,5 @@ class FollowBehavior(Behavior):
             "state": self.state,
             "track": self.track.status(),
             "search": self.search.status(),
+            "aim": self.aim.status(time.monotonic()) if self.aim else None,
         }

@@ -82,6 +82,47 @@ and changes all of them — not the values.
 accepts a request nobody meant and never tells the sender that the number
 it asked for is not the number in force.
 
+## Thresholds
+
+A threshold goes **in the gap between two measured distributions**, never
+on top of one. Both distributions, not just the signal: what the thing
+scores, and what everything else scores, measured over the range of
+situations the car will actually be in.
+
+This rule cost a day. The ball finder's roundness bar was set three times
+and was wrong three times, each time from one measurement:
+
+| Bar | Measured from | What it did |
+|---|---|---|
+| 0.72 | one frame, ball scored 0.82 | landed exactly on the ball's floor; the box vanished 7 frames in 100 |
+| 0.45 | 150 frames of one pose, nothing else above 0.07 | the car turned, the room offered a blob at 0.46, and it chased a chair |
+| 0.65 | the ball measured in the middle of the frame | a ball at the edge scores 0.5, so nothing could ever be acquired |
+
+The third is the instructive one. The ball's roundness is not one
+distribution: it is 0.72 in the middle of the picture and 0.42 at the
+edge, because the clipped part of a disc is not a disc. A bar set from
+the first number is applied in the second situation, because acquisition
+happens at the edge — that is what acquisition *is*.
+
+So:
+
+- **Measure the signal where it will be judged**, not where it looks best.
+- **Measure the background too**, by pointing the car at the rest of the
+  room, not only at the target.
+- **If the distributions overlap, say so and find another number.** That
+  is a result. Roundness and size overlap separately and not together,
+  which is why the finder now uses both.
+- **One sample is not a measurement.** Two single-frame estimates of the
+  camera's field of view came out as 16 degrees and 12; a lens does not
+  change overnight, and both were taken over rotations small enough that
+  the noise was most of the signal.
+
+The same arithmetic applies to anything with a tolerance in it. A step
+that is called off when it is within 1.2 degrees of its goal will still
+overshoot by nine if nobody measured that the chassis coasts 7.6 degrees
+after the command is cut and travels another 1.7 while the control loop
+gets round to withdrawing it.
+
 ## Control
 
 **The safety layer only ever removes motion.** It may slow, clamp or refuse;
@@ -142,6 +183,28 @@ disk filling because of something else.
 
 **Nothing fails silently.** An exception that is swallowed must leave a line
 behind saying so.
+
+## Measuring the car
+
+Numbers about this machine — how fast it turns, how far it coasts, how
+wide the camera sees, how quickly the control loop really goes round —
+belong in `calibration.json`, and every one of them has to come from an
+experiment the car ran on itself. The scripts that did it work the same
+way and it is worth keeping to:
+
+- **The car sets up its own test cases.** Turning away by an amount the
+  gyro knows puts the target at a known bearing. Nothing that needs a
+  person to stand there holding something gets run twice.
+- **It puts things back.** A measurement that leaves the target out of
+  frame has made the next measurement impossible.
+- **Every step is printed, and implausible ones are named and dropped
+  rather than averaged.** A run that reported a 119-degree sweep from
+  three pulses worth three degrees each said so only in a summary, and
+  the wild reading hid inside a median and came out looking like a lens
+  that had changed overnight.
+- **Report the spread, not just the middle.** Two directions that
+  disagree by more than the thing being measured could vary is the
+  result, and it is usually the measurement that is wrong.
 
 ## Checking it
 

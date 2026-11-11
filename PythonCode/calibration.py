@@ -40,6 +40,34 @@ DEFAULTS = {
     #: the sort of thing that differs between two cars built from the same
     #: parts, which is why it is a measurement and not a constant.
     "heading_reversed": False,
+    #: Half the camera's horizontal field of view, in degrees: how far off
+    #: the nose something at the edge of the picture is.
+    #:
+    #: Measured by turning the car a known amount with the gyro watching
+    #: and seeing how far the ball moved across the picture: 16 degrees,
+    #: so about 33 across. Worth measuring rather than assuming, because
+    #: the two common lenses for this sensor are 62 and 160 degrees across
+    #: and this is neither.
+    #:
+    #: Without it nothing can turn a position in the picture into an angle
+    #: to turn through, so the follower creeps in minimum steps instead --
+    #: slower, and unable to overshoot a number nobody has measured.
+    "camera_half_fov_deg": None,
+    #: How fast this chassis rotates once it is actually moving, in degrees
+    #: per second. Measured at the turn floor, since that is the slowest it
+    #: will go: 46. Used to guess how long a step should take; the gyro
+    #: decides when it is really finished.
+    "turn_rate_deg_s": None,
+    #: How far the chassis keeps turning after a step is called off, in
+    #: degrees, with the brake in aim.brake_s applied.
+    #:
+    #: Measured here at 3.7, from a median of sixteen runs; without the
+    #: brake it is 8.6. The spread is the interesting part and the
+    #: reason nothing open-loop is built on this: unbraked runs of the
+    #: same command ranged from 2.1 degrees to 13.6. So this removes the
+    #: systematic half of the overshoot and the closed loop handles the
+    #: rest.
+    "turn_coast_deg": None,
     #: The nearest thing each pan angle can see when the room is empty, keyed
     #: by angle as a string. Not a setting: it is a measurement of what parts
     #: of this car are in the sensor's way, which depends entirely on where

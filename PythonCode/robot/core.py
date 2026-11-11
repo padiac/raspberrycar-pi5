@@ -75,6 +75,10 @@ class Robot:
     #: energy looking at a room nobody is asking about.
     idle_camera_after = 300.0
 
+    #: How fast the control loop is really going round, smoothed. None
+    #: until it has been round once.
+    loop_hz = None
+
     speed_limit = 0.40
     #: Momentary, from a controller's trigger: lifts the limit for as long
     #: as it is held rather than changing what the slider says. Zero unless
@@ -752,6 +756,18 @@ class Robot:
             time.sleep(period)
             now = time.monotonic()
             dt, previous = now - previous, now
+
+            # What the loop is actually managing, as opposed to what it
+            # asks for. The sleep is a floor, not a period: the work on
+            # top of it includes copying a 1280x720 frame, and when the
+            # detector is busy that work grows. Everything timed off this
+            # loop -- how far a turn travels before it can be called off,
+            # how stale a reading is -- depends on the real number, and
+            # it was invisible while being the cause of a control fault.
+            self.loop_hz = (1.0 / dt if self.loop_hz is None and dt > 0
+                            else self.loop_hz)
+            if dt > 0:
+                self.loop_hz = self.loop_hz * 0.9 + (1.0 / dt) * 0.1
 
             try:
                 world = self._perceive(dt)

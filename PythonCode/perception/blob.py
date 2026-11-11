@@ -62,6 +62,63 @@ HUE_CEILING = 180
 #: and it is sized to a physical property of the ball's surface.
 KERNEL = 9
 
+#: Why there are two bars and not one, and where they came from.
+#:
+#: Measured on this car, in this room, today:
+#:
+#:     the ball, properly in view      0.720 .. 0.730
+#:     the ball, half off the edge     0.415 .. 0.505
+#:     everything else dark            0.089 .. 0.620
+#:
+#: There is nowhere to put a single number. 0.72 was tried first, from
+#: one frame in which the ball scored 0.82; it landed exactly on the
+#: ball's floor and the box vanished seven frames in a hundred. 0.45 was
+#: tried next, from 150 frames of a single pose where nothing else rose
+#: above 0.07; the moment the car turned to look elsewhere the room
+#: offered a blob at 0.46 and the recovery sweep chased it instead.
+#:
+#: Both failures are the same mistake: a bar measured in one situation
+#: and applied to another. The ball's roundness is not one distribution,
+#: it is two, and which one applies depends on how much of the ball is
+#: inside the frame -- the clipped half of a disc is not a disc.
+#:
+#: So this bar only decides what is worth mentioning. Whether a mention
+#: is the target is decided by the track, which knows where the target
+#: was predicted to be and can therefore accept a badly clipped ball in
+#: the right place while refusing a well-shaped chair leg in the wrong
+#: one. See `tracking.confident` in control/estimator.py.
+
+#: Where the roundness threshold came from.
+#:
+#: It was first set to 0.72 from a single frame in which the ball measured
+#: 0.82, which looked like comfortable margin and was not. Over 150 live
+#: frames:
+#:
+#:     the ball            0.7200 .. 0.7303
+#:     everything else     0.0685 .. 0.0696
+#:     the threshold       0.7200
+#:
+#: Exactly on the signal's lower edge, so every frame that landed at the
+#: bottom of the ball's range was rejected: the box vanished about seven
+#: times in a hundred while the ball sat plainly in the middle of the
+#: picture, which is how it was reported. A threshold with no margin is
+#: not a threshold, it is a coin toss weighted by noise.
+#:
+#: The real gap is enormous -- 0.07 against 0.72 -- because the things
+#: this room is full of are long and thin rather than round. 0.45 leaves
+#: about 0.27 either side.
+#:
+#: Two things the measurement also said, worth keeping. The ball scores
+#: 0.72 rather than 0.85 because it is partly off the bottom of the
+#: picture at this distance, and a clipped disc is not a disc; and its
+#: dimples are pale, survive the closing, and eat into the area. Neither
+#: is worth fixing while the margin is this wide.
+#:
+#: What this cannot separate is a dark *square*, which scores 0.64 on
+#: this measure. Nothing here pretends otherwise: telling a ball from a
+#: box is the track's job, by where the thing is and whether it is the
+#: one already being followed.
+
 #: The identifier reported for a blob, kept clear of COCO's 0..79 so that
 #: the colour a box is drawn in cannot collide with a detector class.
 CLASS_ID = 200
@@ -116,11 +173,14 @@ SHAPE = group(
         help="Smaller blobs than this are speckle, not a ball. Also the "
              "floor on how far away it can be seen."),
     roundness=Spec(
-        0.72, bounds=(0.1, 1.0),
+        0.40, bounds=(0.1, 1.0),
         help="Blob area divided by the area of the smallest circle round "
-             "it. A perfect disc is 1.0. Measured here: this ball 0.82, "
-             "the sofa base behind it 0.10. This is the only thing "
-             "separating the ball from any other dark object."),
+             "it. A perfect disc is 1.0. This is the bar for being worth "
+             "reporting at all, not for being believed: a ball half off "
+             "the edge of the picture scores like a piece of furniture, "
+             "so the bar for starting to follow something lives with the "
+             "track, in tracking.confident, where there is a prediction "
+             "to judge against."),
 )
 
 

@@ -62,9 +62,16 @@ def scalar():
     return Scalar(jitter=JITTER, manoeuvre=MANOEUVRE)
 
 
+#: The bar a sighting must clear to be worth starting a track on.
+#: Measured on the car: a ball properly in view never scored below 0.72
+#: and nothing else in the room rose above 0.62.
+CONFIDENT = 0.65
+
+
 def track(**kw):
     kw.setdefault("jitter", JITTER)
     kw.setdefault("manoeuvre", MANOEUVRE)
+    kw.setdefault("confident", CONFIDENT)
     return TargetTrack("ball", **kw)
 
 
@@ -221,6 +228,79 @@ check("something that is not what was asked for is not followed",
 blind = track()
 check("with no frame there is nothing to be off-centre of",
       blind.update([ball(0.5)], (0, 0), 0.05), None)
+
+print()
+print("two bars: strict to start, the prediction to continue")
+
+# A single threshold on how round a blob is cannot work here, and the
+# measurements say why. A ball properly in view scores 0.72; the same
+# ball half off the edge of the picture scores 0.42, because the clipped
+# half of a disc is not a disc; and the darker furniture in this room
+# goes up to 0.62. There is nowhere to put one number. Two work, because
+# the question is different once something is already being followed.
+
+# What the room actually offers: dark bits that are neither round nor
+# large. Measured on the car -- the room's corners reach 0.62 for
+# roundness and 0.66% of the picture for size, while the ball manages
+# 0.72 and 4.8% in the middle, or 0.42 and 1.9% half out of view.
+shy = track()
+shy.update([ball(0.3, fill=0.055, confidence=0.50)], (WIDTH, HEIGHT), 0.05)
+check("a dark corner is neither round enough nor big enough to chase",
+      shy.offset, None)
+falsy("and nothing is being followed", shy.alive)
+
+shy.update([ball(0.3, fill=0.055, confidence=0.80)], (WIDTH, HEIGHT), 0.05)
+truthy("but something that really looks like the ball is chased, however "
+       "small", shy.alive)
+
+# The other half of the pair, and the half that matters. A ball off to
+# one side is clipped by the edge of the frame and stops looking round --
+# which is exactly when a chase has to start, because off to one side is
+# where a target is acquired. Trusting roundness alone here left the car
+# reporting "no ball in view" for nine seconds with the ball visible at
+# 0.5, taking no steps at all.
+bulky = track()
+bulky.update([ball(0.65, fill=0.30, confidence=0.48)], (WIDTH, HEIGHT), 0.05)
+truthy("a clipped ball at the edge is chased on its size alone",
+       bulky.alive)
+
+# The price of that, stated rather than discovered later: something large
+# and dark and not at all round will be chased. Roundness is no longer
+# able to veto it. Size and the track's own gate are what stand between
+# the car and a sofa, and this check exists so that nobody is surprised.
+sofa = track()
+sofa.update([ball(0.0, fill=0.40, confidence=0.20)], (WIDTH, HEIGHT), 0.05)
+truthy("and so, deliberately, is anything else that fills the picture",
+       sofa.alive)
+
+# ...and from then on, where it is beats what it looks like. A ball
+# wandering off the edge of the picture is exactly when its shape stops
+# being recognisable, and exactly when dropping it is least useful.
+held = track()
+held.update([ball(0.3, confidence=0.80)], (WIDTH, HEIGHT), 0.05)
+kept = held.update([ball(0.34, confidence=0.42)], (WIDTH, HEIGHT), 0.05)
+check("once following, a poor view in the right place is kept",
+      kept is not None, True)
+truthy("and the track survives on it", held.alive)
+
+# But position has to beat looks in both directions, or the first
+# convincing thing to walk past steals the car.
+loyal = track(gate=0.3)
+loyal.update([ball(0.0, confidence=0.80)], (WIDTH, HEIGHT), 0.05)
+check("a convincing sighting in the wrong place is still refused",
+      loyal.update([ball(0.9, confidence=0.95)], (WIDTH, HEIGHT), 0.05), None)
+
+# The strict bar must not apply after a track exists, or a target that
+# merely gets harder to see would be dropped and immediately refused
+# re-acquisition at the same spot.
+reacquired = track()
+reacquired.update([ball(-0.2, confidence=0.9)], (WIDTH, HEIGHT), 0.05)
+for _ in range(3):
+    reacquired.update([], (WIDTH, HEIGHT), 0.05)
+back = reacquired.update([ball(-0.22, confidence=0.45)], (WIDTH, HEIGHT), 0.05)
+check("a target that reappears looking worse is picked up again",
+      back is not None, True)
+
 
 print()
 print("what it reports")

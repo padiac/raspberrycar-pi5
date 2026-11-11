@@ -90,6 +90,7 @@ def describe(robot):
         # main poll would buy a stat() of every rotated file for every
         # tick of a page nobody may even be looking at. It has its own
         # endpoint, polled far more slowly by the panel that wants it.
+        "loop_hz": None if robot.loop_hz is None else round(robot.loop_hz, 1),
         "stream_fps": round(robot.vision.stream_fps, 1) if robot.vision else 0.0,
         "detect_fps": round(robot.vision.detect_fps, 1) if robot.vision else 0.0,
         "detect_enabled": robot.vision.detect_enabled if robot.vision else False,

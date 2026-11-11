@@ -121,6 +121,24 @@ BELIEF = group(
              "than the detector looks, so seeing one sighting twice is "
              "normal; seeing it for half a second means the detector has "
              "stopped looking."),
+    confident=Spec(
+        0.65, bounds=(0.0, 1.0),
+        help="How sure a sighting must look before it is worth starting "
+             "to follow. One of two ways to qualify; see sure_size. Only "
+             "applies to the first sighting -- after that, being where "
+             "the target was predicted to be is far better evidence than "
+             "how the thing looks. Measured on this car: a ball in the "
+             "middle of the picture scores 0.72 and nothing else in the "
+             "room rises above 0.62."),
+    sure_size=Spec(
+        0.012, bounds=(0.0, 1.0),
+        help="How much of the picture a sighting must fill to be worth "
+             "starting to follow regardless of its shape. The other way "
+             "to qualify, and the one that matters: a ball off to one "
+             "side is clipped by the edge of the frame and stops looking "
+             "round, which is exactly when a chase has to start. "
+             "Measured here: the ball fills 1.9% even when half out of "
+             "view, and the room's dark corners never reached 0.7%."),
     doubt=Spec(
         0.30, bounds=(0.01, 2.0),
         help="How uncertain the position may get, in half-frame-widths, "
@@ -232,7 +250,8 @@ class TargetTrack:
     """
 
     def __init__(self, label, jitter=None, manoeuvre=None,
-                 gate=None, patience=None, doubt=None, stale_after=None):
+                 gate=None, patience=None, doubt=None, stale_after=None,
+                 confident=None, sure_size=None):
         self.label = label
         self.x = Scalar(jitter, manoeuvre)
         self.y = Scalar(jitter, manoeuvre)
@@ -245,6 +264,8 @@ class TargetTrack:
         self._patience = patience
         self._doubt = doubt
         self._stale_after = stale_after
+        self._confident = confident
+        self._sure_size = sure_size
 
         #: The exact sighting last folded in, and how long ago that was.
         #:
@@ -284,6 +305,31 @@ class TargetTrack:
     @property
     def doubt_limit(self):
         return BELIEF.doubt if self._doubt is None else self._doubt
+
+    @property
+    def confident(self):
+        return BELIEF.confident if self._confident is None else self._confident
+
+    @property
+    def sure_size(self):
+        return BELIEF.sure_size if self._sure_size is None else self._sure_size
+
+    def _convincing(self, detection, frame_size):
+        """Worth starting a chase on, with nothing to compare it against.
+
+        Either it looks like the thing, or there is a great deal of it.
+        Both tests are weak on their own and they are weak in different
+        places, which is the only reason this works: a ball at the edge
+        of the picture is not round, and a ball across the room is not
+        large, but a ball is never both at once in a way that matters.
+        """
+        if detection.confidence >= self.confident:
+            return True
+        width, height = frame_size
+        picture = float(width) * float(height)
+        if picture <= 0:
+            return False
+        return (detection.area / picture) >= self.sure_size
 
     @property
     def stale_after(self):
@@ -355,7 +401,16 @@ class TargetTrack:
             return None
 
         if not self.x.known:
-            return max(mine, key=lambda d: d.area)
+            # Nothing is being followed yet, so there is no prediction to
+            # judge a sighting against and the sighting has to stand on
+            # its own. This is the only place the finder's own confidence
+            # carries any weight, and the only place it has to: once
+            # there is a track, where a thing is beats what it looks
+            # like, every time.
+            sure = [d for d in mine if self._convincing(d, frame_size)]
+            if not sure:
+                return None
+            return max(sure, key=lambda d: d.area)
 
         best, best_gap = None, None
         for det in mine:
