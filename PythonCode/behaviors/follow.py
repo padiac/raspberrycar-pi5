@@ -202,6 +202,59 @@ CHASE = group(
 )
 
 
+class RangeGate:
+    """Refuse a distance that jumps, until it has kept jumping for a while.
+
+    Measured against a wall while driving at 10cm/s: the ultrasonic every
+    so often hears the far side of the room instead, and reads 75-86cm for
+    up to four consecutive samples while the wall is 45cm away. The
+    distance controller's D term turned that into a lurch.
+
+    Nothing real in front of this car moves 15cm in a twentieth of a
+    second, so a jump that large is held off. If it persists it is real --
+    the ball was picked up, or something stepped in -- and is accepted.
+    Only the follower is filtered; the safety layer keeps the raw reading,
+    which is the conservative choice for it.
+    """
+
+    JUMP_CM = 15.0
+    PERSIST_S = 0.6
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.value = None
+        self._odd_for = 0.0
+
+    def update(self, reading, dt):
+        if reading is None:
+            self.reset()
+            return None
+        if self.value is None or abs(reading - self.value) <= self.JUMP_CM:
+            self.value = reading
+            self._odd_for = 0.0
+            return reading
+        self._odd_for += max(0.0, dt or 0.0)
+        if self._odd_for >= self.PERSIST_S:
+            self.value = reading
+            self._odd_for = 0.0
+            return reading
+        return self.value
+
+
+#: Only drive forwards or backwards with the target this near the middle.
+#:
+#: Distance comes from apparent size whenever the rangefinder cannot be
+#: believed, and a ball near the edge of this narrow picture is clipped by
+#: it -- so it looks smaller, so it looks further away, so the car drives at
+#: it. On the car that is exactly what happened: at offsets of 0.8 it drove
+#: forward at "fill 0.29" and pushed the ball out of sight. At 45cm the ball
+#: spans about a third of the half-width, so past 0.6 it is starting to be
+#: cut off. Turn first; the distance can wait one step.
+DRIVE_WITHIN = 0.6
+
+
 class FollowBehavior(Behavior):
     name = "follow"
     label = "Follow object"
@@ -228,6 +281,7 @@ class FollowBehavior(Behavior):
         #: below brings to CHASE.max_forward.
         self.distance_pid = PID(kp=0.02, kd=0.005, setpoint=CHASE.standoff_cm)
         self.forward_pid = PID(kp=2.0, kd=0.2, setpoint=CHASE.target_fill)
+        self.range_gate = RangeGate()
 
         self.track = self._new_track()
         #: Where to look when the target has gone. Owned here rather than
@@ -279,6 +333,7 @@ class FollowBehavior(Behavior):
             self.aim.forget()
         self.distance_pid.reset()
         self.forward_pid.reset()
+        self.range_gate.reset()
 
     def _measure(self, robot):
         """Read what was measured about this car's camera and chassis."""
@@ -450,12 +505,12 @@ class FollowBehavior(Behavior):
 
         # -- drive: hold a real distance, and fall back to apparent size ----
         ahead = abs(offset) < CHASE.ahead_deadband
-        measured = (
+        measured = self.range_gate.update(
             world.range_cm
             if (world.range_cm is not None and world.range_cm > 0
                 and world.range_forward and ahead)
-            else None
-        )
+            else None,
+            world.dt)
 
         vx = 0.0
         if measured is not None:
@@ -491,6 +546,19 @@ class FollowBehavior(Behavior):
             # going is a reasonable bet and costs nothing if it is wrong;
             # driving at something nobody can currently see is neither.
             vx = 0.0
+
+        if abs(offset) > DRIVE_WITHIN:
+            vx = 0.0
+
+        if vx:
+            # The same fault the turn had: the governor scales this by the
+            # speed limit, and at 0.4 everything the distance controller
+            # asks for inside 25cm of error arrives at the wheels under the
+            # measured 0.20 floor. Measured: the car does not move at 0.15
+            # in either direction. The facing falloff above still shapes
+            # speed over the floor; under it there is no slower, only still.
+            lifted = robot.enough_to_drive(abs(vx))
+            vx = lifted if vx > 0 else -lifted
 
         vx = max(-CHASE.max_forward, min(CHASE.max_forward, vx))
         vy = self.orbit * CHASE.max_strafe

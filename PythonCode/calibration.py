@@ -93,6 +93,10 @@ DEFAULTS = {
     #: so it costs more than driving straight and has its own floor.
     #: Zero means nobody has measured it, and nothing will be said.
     "turn_floor": 0.0,
+    #: Duty cycle below which driving forwards or backwards does not move
+    #: the car. Measured at 0.20 against a wall: 0.15 moved it nowhere in
+    #: either direction. Zero means nobody has measured it.
+    "drive_floor": 0.0,
     #: Whether the side infrared is actually connected. False means the
     #: pins are sitting at their pull-ups, and a pull-up reads exactly
     #: like a clear road -- so until somebody has watched the numbers

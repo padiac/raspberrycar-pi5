@@ -319,6 +319,27 @@ check("forgetting really forgets", reporting.offset, None)
 check("including how many times it had been seen", reporting.seen, 0)
 
 print()
+print("a lost target is believed to be off the edge, not off in the distance")
+
+from control.estimator import EDGE                              # noqa: E402
+
+fleeing = track()
+for step in range(6):
+    fleeing.update([ball(0.3 + 0.1 * step)], (WIDTH, HEIGHT), 0.05)
+for _ in range(30):
+    fleeing.update([], (WIDTH, HEIGHT), 0.05)
+truthy("thirty missed looks later it is just past the edge it left by",
+       0.0 < fleeing.offset <= EDGE)
+close("  and no longer moving", fleeing.drift, 0.0, 1e-9)
+
+shrinking = track()
+for step in range(6):
+    shrinking.update([ball(0.0, fill=0.30 - 0.04 * step)], (WIDTH, HEIGHT), 0.05)
+for _ in range(30):
+    shrinking.update([], (WIDTH, HEIGHT), 0.05)
+truthy("and nothing coasts to a negative size", shrinking.size.value >= 0.0)
+
+print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
     sys.exit(1)

@@ -55,6 +55,9 @@ class FakeRobot:
     def enough_to_turn(self, magnitude):
         return magnitude
 
+    def enough_to_drive(self, magnitude):
+        return magnitude
+
 
 def world(offset=0.0, fill=0.30, range_cm=None, range_forward=True):
     """A frame with one bottle in it, at a given bearing and apparent size."""
@@ -364,6 +367,47 @@ check("  and eventually gives up instead of turning for ever",
       (out.vx, out.omega), (0.0, 0.0))
 check("  saying it lost the thing, not that it never saw one",
       hunting.status()["state"], "lost the bottle")
+
+print()
+print("driving: over the floor, and not fooled by an echo off the far wall")
+
+
+class FlooredRobot(FakeRobot):
+    """The real arithmetic with the measured floors and the 0.4 governor."""
+    speed_limit = 0.4
+
+    def enough_to_drive(self, magnitude):
+        return min(1.0, max(magnitude, 0.20 / self.speed_limit))
+
+
+# Just outside the deadband, the distance controller asks for 0.18 and the
+# governor would make that 0.07 at the wheels: no movement. Lifted, it
+# reaches 0.5 * 0.4 = 0.20, which does move the car.
+nudged = follower().update(
+    FlooredRobot(), world(range_cm=STANDOFF_CM + DISTANCE_DEADBAND_CM + 1))
+check("a small distance error is lifted to something that moves the car",
+      round(nudged.vx, 3), 0.5)
+inside = follower().update(
+    FlooredRobot(), world(range_cm=STANDOFF_CM + DISTANCE_DEADBAND_CM - 1))
+check("  but inside the deadband nothing is manufactured", inside.vx, 0.0)
+
+edge = follower().update(
+    FlooredRobot(), world(offset=0.8, fill=0.10, range_cm=None))
+check("  but not at a target near the edge, where it looks smaller than it is",
+      edge.vx, 0.0)
+
+steady = follower()
+for _ in range(5):
+    steady.update(FakeRobot(), world(range_cm=STANDOFF_CM))
+spike = steady.update(FakeRobot(), world(range_cm=STANDOFF_CM + 40))
+check("a single far echo does not send it forward", spike.vx, 0.0)
+for _ in range(3):
+    spike = steady.update(FakeRobot(), world(range_cm=STANDOFF_CM + 40))
+check("  nor four in a row, which is what the wall test produced",
+      spike.vx, 0.0)
+for _ in range(10):
+    spike = steady.update(FakeRobot(), world(range_cm=STANDOFF_CM + 40))
+check_sign("  but one that persists is believed", spike.vx, +1)
 
 print()
 if FAILURES:

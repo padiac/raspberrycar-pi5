@@ -433,7 +433,20 @@ class Robot:
         No floor measured -- nobody has run the calibration -- and this does
         nothing, which is the behaviour from before it existed.
         """
-        floor = self.calibration.get("turn_floor") if self.calibration else 0.0
+        return self._over_floor(magnitude, "turn_floor")
+
+    def enough_to_drive(self, magnitude):
+        """The same for driving forwards and backwards.
+
+        Measured against a wall with the rangefinder: 0.15 at the wheels
+        does not move the car either way, 0.20 does. The follower's distance
+        controller asked for 0.16 at its own deadband, which the governor
+        made 0.064 -- so it sat still until it was 25cm out and then lurched.
+        """
+        return self._over_floor(magnitude, "drive_floor")
+
+    def _over_floor(self, magnitude, key):
+        floor = self.calibration.get(key) if self.calibration else 0.0
         if not floor:
             return magnitude
         return min(1.0, max(magnitude, floor / max(self.speed_limit, 1e-6)))

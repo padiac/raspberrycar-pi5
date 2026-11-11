@@ -19,7 +19,11 @@ class PID:
         self.integral_limit = integral_limit
 
         self.error = 0.0
-        self.last_error = 0.0
+        #: None until there has been one update. Differencing the first
+        #: error against a made-up zero turned the whole of it into one
+        #: tick's change: the follower's distance loop, 9cm out on its
+        #: first tick, asked for 0.9 from the D term alone.
+        self.last_error = None
         self.integral = 0.0
         #: True when the last update's derivative came from a rate handed in
         #: rather than from subtracting two measurements. Reported so that a
@@ -27,7 +31,8 @@ class PID:
         self.measured_rate = False
 
     def reset(self):
-        self.error = self.last_error = self.integral = 0.0
+        self.error = self.integral = 0.0
+        self.last_error = None
         self.measured_rate = False
 
     def update(self, measured, dt=None, rate=None):
@@ -63,7 +68,8 @@ class PID:
 
         if rate is None:
             self.measured_rate = False
-            derivative_input = (self.error - self.last_error)
+            derivative_input = (0.0 if self.last_error is None
+                                else self.error - self.last_error)
             if dt:
                 derivative_input /= dt
         else:

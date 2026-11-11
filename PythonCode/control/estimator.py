@@ -92,6 +92,10 @@ from perception.types import Detection     # noqa: F401 - documents the input
 #: given up. Rate noise there is 0.030, which the steering gain of 0.25
 #: turns into 0.0075 of turn authority out of a motionless ball, against
 #: 0.086 for the old code's differenced measurement.
+#: How far past the edge of the picture a belief about where the target is
+#: may go: just beyond it, meaning "off that side", and no further.
+EDGE = 1.1
+
 BELIEF = group(
     "tracking",
     jitter=Spec(
@@ -377,6 +381,22 @@ class TargetTrack:
         self.x.predict(dt)
         self.y.predict(dt)
         self.size.predict(dt)
+        # A prediction is only worth anything inside the picture. Most of the
+        # rate a track carries when it loses its target is the car's own
+        # turning, which stops when the step does -- but the filter cannot
+        # know that, and carried on extrapolating. Measured on the car: four
+        # missed looks took a ball at +0.8 to an offset of -2.7, thirty-four
+        # degrees away, and the next step turned there. Off the edge is all
+        # that can be said about something that has gone off the edge, so
+        # the belief stops there and stops moving.
+        for scalar in (self.x, self.y):
+            if scalar.known and abs(scalar.value) > EDGE:
+                scalar.value = EDGE if scalar.value > 0 else -EDGE
+                scalar.rate = 0.0
+        if self.size.known and self.size.value < 0.0:
+            # Seen on the car as a fill of -0.27. Nothing has negative size.
+            self.size.value = 0.0
+            self.size.rate = 0.0
 
     def choose(self, detections, frame_size):
         """Which of these, if any, is the thing being followed.
