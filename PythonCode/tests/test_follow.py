@@ -420,6 +420,81 @@ for _ in range(10):
 check_sign("  but one that persists is believed", spike.vx, +1)
 
 print()
+print("a ball on the floor leaves through the bottom of the picture")
+# Measured on the car: the camera looks slightly up, the ball touches the
+# bottom edge at 50cm and is gone at 35cm, and the ultrasonic, sitting
+# above it, reads the sofa behind.
+
+
+def at_bottom(turned=0.0, range_cm=190.0, box_px=200):
+    """A round thing, cut off by the bottom of the frame."""
+    x = WIDTH / 2
+    box = (x - box_px / 2, HEIGHT - box_px * 0.7, x + box_px / 2, HEIGHT)
+    return WorldState(
+        dt=0.05, frame_size=(WIDTH, HEIGHT),
+        detections=[Detection("bottle", 0.9, box, 39)],
+        range_cm=range_cm, range_expected=True, range_forward=True,
+        turned=turned, turn_rate=0.0)
+
+
+clipped = follower()
+for _ in range(3):
+    out = clipped.update(FlooredRobot(), at_bottom())
+check("cut off at the bottom with a far echo: does not drive forward",
+      out.vx <= 0.0, True)
+check("  and its size comes from the width, which the edge does not cut",
+      round(clipped.track.size.value, 2) >= round(140 / HEIGHT, 2), True)
+
+# Lost from there, with the car still facing the same way: it backs off
+# rather than turning round to look for something in front of it.
+backs = []
+for step in range(30):
+    out = clipped.update(FlooredRobot(), nothing_at(turned=0.0))
+    backs.append(out.vx)
+check("lost close up and facing where it was: it backs off",
+      min(backs) < 0.0, True)
+check("  and says so", "close up" in clipped.status()["state"]
+      or "searching" in clipped.status()["state"]
+      or "looking" in clipped.status()["state"], True)
+for _ in range(200):
+    out = clipped.update(FlooredRobot(), nothing_at(turned=0.0))
+check("  and only for a while, not all the way across the room",
+      out.vx, 0.0)
+
+# What broke it on the car: a ball half under the picture is recognised
+# now and then, one frame at a time, at the edge of the detector's nerve.
+flicker = follower()
+for _ in range(3):
+    flicker.update(FlooredRobot(), at_bottom())
+for _ in range(20):
+    flicker.update(FlooredRobot(), nothing_at(turned=0.0))
+flicker.update(FlooredRobot(), at_bottom(box_px=60))      # one stray glimpse
+kept = []
+for _ in range(6):
+    kept.append(flicker.update(FlooredRobot(), nothing_at(turned=0.0)).vx)
+check("one glimpse while backing off does not cancel it",
+      min(kept) < 0.0, True)
+
+turned_away = follower()
+for _ in range(3):
+    turned_away.update(FlooredRobot(), at_bottom(turned=0.0))
+reversed_any = False
+for _ in range(20):
+    out = turned_away.update(FlooredRobot(), nothing_at(turned=30.0))
+    reversed_any = reversed_any or out.vx < 0
+check("lost close up but facing elsewhere: turn back first, no reversing",
+      (reversed_any, out.omega < 0), (False, True))
+
+far_lost = follower()
+for _ in range(4):
+    far_lost.update(FlooredRobot(), seen_at(0.0, turned=0.0))
+reversed_any = False
+for _ in range(40):
+    out = far_lost.update(FlooredRobot(), nothing_at(turned=0.0))
+    reversed_any = reversed_any or out.vx < 0
+check("lost while small and far: never reverses", reversed_any, False)
+
+print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
     sys.exit(1)

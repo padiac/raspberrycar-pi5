@@ -96,6 +96,10 @@ from perception.types import Detection     # noqa: F401 - documents the input
 #: may go: just beyond it, meaning "off that side", and no further.
 EDGE = 1.1
 
+#: A box this close to the bottom of the frame (as a fraction of its
+#: height) is taken to be cut off by it.
+BOTTOM_MARGIN = 0.02
+
 BELIEF = group(
     "tracking",
     jitter=Spec(
@@ -263,6 +267,8 @@ class TargetTrack:
         #: position, and nothing steers off it, so it gets the same filter
         #: rather than its own tuning.
         self.size = Scalar(jitter, manoeuvre)
+        #: The last sighting touched the bottom of the picture.
+        self.below = False
 
         self._gate = gate
         self._patience = patience
@@ -485,7 +491,18 @@ class TargetTrack:
 
         self.x.correct(self._offset_of(chosen, width))
         self.y.correct((chosen.centre_y - height / 2.0) / (height / 2.0))
-        self.size.correct(chosen.height / float(height))
+        # Cut off by the bottom of the picture: the box stops growing at the
+        # frame edge while the thing keeps getting closer, so its height
+        # says smaller just as it gets nearer. Measured on the car with the
+        # ball: 0.39 of the frame at 50cm, already touching the edge, and
+        # falling from there. The width is not cut by the bottom edge, and
+        # for anything about as wide as it is tall it is the better size.
+        # For anything taller than wide, max() leaves the height in charge.
+        self.below = chosen.box[3] >= height * (1.0 - BOTTOM_MARGIN)
+        tall = chosen.height
+        if self.below:
+            tall = max(tall, chosen.width)
+        self.size.correct(tall / float(height))
         return chosen
 
     @staticmethod
@@ -493,6 +510,7 @@ class TargetTrack:
         return (detection.centre_x - width / 2.0) / (width / 2.0)
 
     def forget(self):
+        self.below = False
         self.x.forget()
         self.y.forget()
         self.size.forget()

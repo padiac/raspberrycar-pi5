@@ -254,6 +254,27 @@ class RangeGate:
 #: cut off. Turn first; the distance can wait one step.
 DRIVE_WITHIN = 0.6
 
+#: Lost close up: how long to back away, and how hard, before sweeping.
+#:
+#: The camera looks slightly up, so a ball on the floor leaves through the
+#: bottom of the picture at about 45cm -- measured: touching the edge at
+#: 50cm, gone at 35cm -- and a car that then turns round looking for it
+#: finds nothing, because it is right in front. The gyro settles which case
+#: it is: back at the heading it was last seen from and still nothing means
+#: it did not go sideways, it went under. About 10cm/s at the drive floor,
+#: so this is about 25cm. Backwards is blind; that is why it is short.
+BACK_OFF_S = 2.5
+BACK_OFF_EFFORT = 0.5
+#: Within this many degrees of the last-seen heading counts as back there.
+BACK_AT_DEG = 5.0
+#: And if it never gets back there, give the ordinary search its turn.
+BACK_OFF_GIVE_UP_S = 4.0
+#: Once backing off, sightings in a row that count as having it back. Seen
+#: on the car: a ball half under the picture is recognised for a frame now
+#: and then at 0.41, each of those cancelled the backing after 0.1s, and the
+#: next loss was judged by that one small, clipped box as "far away".
+BACK_OFF_FOUND_AFTER = 3
+
 
 class FollowBehavior(Behavior):
     name = "follow"
@@ -291,6 +312,12 @@ class FollowBehavior(Behavior):
         self.search = Reacquire()
         #: Heading at the last real sighting; see update().
         self._seen_at = 0.0
+        #: Whether that sighting was close enough to lose under the picture,
+        #: and how the backing-off has gone since.
+        self._close_when_seen = False
+        self._backed = 0.0
+        self._back_phase = 0.0
+        self._backing = False
         self.state = "waiting"
 
     @property
@@ -329,6 +356,10 @@ class FollowBehavior(Behavior):
         self.track = self._new_track()
         self.search.found()
         self._seen_at = 0.0
+        self._close_when_seen = False
+        self._backed = 0.0
+        self._back_phase = 0.0
+        self._backing = False
         if self.aim is not None:
             self.aim.forget()
         self.distance_pid.reset()
@@ -401,6 +432,15 @@ class FollowBehavior(Behavior):
         self.forward_pid.setpoint = CHASE.target_fill
 
         self.track.update(world.detections, world.frame_size, world.dt)
+        if self._backing:
+            if self.track.alive and self.track.seen >= BACK_OFF_FOUND_AFTER:
+                self._backing = False
+                self.search.found()
+            else:
+                backing = self._back_off(robot, world)
+                if backing is not None:
+                    return backing
+                self._backing = False
         if self.track.fresh:
             # The heading the target was last actually seen from, which is
             # not the heading at which the track is declared dead: it coasts
@@ -408,6 +448,11 @@ class FollowBehavior(Behavior):
             # throughout. Anchoring the search on the later of the two sends
             # it back to where the target already was not.
             self._seen_at = world.turned
+            fill_now = self.track.size.value
+            self._close_when_seen = bool(
+                self.track.below
+                or (fill_now is not None
+                    and fill_now >= CHASE.target_fill - CHASE.fill_deadband))
 
         if not self.track.alive:
             # Either never seen, or coasted for longer than it is worth.
@@ -448,6 +493,10 @@ class FollowBehavior(Behavior):
             # a prediction made a long time ago from somewhere else.
             self.track.forget()
 
+            backing = self._back_off(robot, world)
+            if backing is not None:
+                return backing
+
             turning = self.search.steer(world.turned, world.dt)
             if turning is None:
                 self.state = (f"lost the {self.target}"
@@ -462,6 +511,8 @@ class FollowBehavior(Behavior):
             return Velocity(omega=turning)
 
         self.search.found()
+        self._backed = 0.0
+        self._back_phase = 0.0
         offset = self.track.offset
         drift = self.track.drift
 
@@ -526,6 +577,14 @@ class FollowBehavior(Behavior):
             # the floor is the normal case for this car, not an odd one.
             measured = None
             why_not = "echo is past it"
+        if (measured is not None and self.track.below
+                and measured > self.standoff_cm + CHASE.distance_deadband_cm):
+            # The same thing caught earlier: cut off by the bottom of the
+            # picture means it is within about 50cm whatever the echo says.
+            # The fill check above missed it on the car, because the
+            # cut-off box was reporting a shrinking size.
+            measured = None
+            why_not = "under the picture"
 
         vx = 0.0
         if measured is not None:
@@ -562,6 +621,10 @@ class FollowBehavior(Behavior):
 
         if abs(offset) > DRIVE_WITHIN:
             vx = 0.0
+        if self.track.below and vx > 0:
+            # Already at the bottom edge; one more step forward and it is
+            # out of sight under the camera.
+            vx = 0.0
 
         if vx:
             # The same fault the turn had: the governor scales this by the
@@ -582,6 +645,33 @@ class FollowBehavior(Behavior):
                "" if self.track.fresh else " | coasting %d" % self.track.missed)
         )
         return Velocity(vx=vx, vy=vy, omega=omega)
+
+    def _back_off(self, robot, world):
+        """Back away from a target lost close up, or None to search instead.
+
+        Turns back to the heading it was last seen from first -- with the
+        search's clock held, so its sweep does not open meanwhile -- and
+        only backs up once there. See BACK_OFF_S.
+        """
+        if (not self._close_when_seen or self._backed >= BACK_OFF_S
+                or self._back_phase >= BACK_OFF_GIVE_UP_S
+                or world.turned is None
+                or not (self.search.searching or self._backing)):
+            return None
+        self._backing = True
+        dt = max(0.0, world.dt or 0.0)
+        self._back_phase += dt
+        turning = self.search.steer(world.turned, 0.0)
+        if turning is None:
+            return None
+        if abs(world.turned - self.search.anchor) > BACK_AT_DEG:
+            self.state = f"lost the {self.target} close up; turning back to it"
+            return Velocity(omega=turning)
+        self._backed += dt
+        self.state = ("lost the %s close up; backing off to see it (%.1fs)"
+                      % (self.target, self._backed))
+        return Velocity(vx=-robot.enough_to_drive(BACK_OFF_EFFORT),
+                        omega=turning)
 
     def overlay(self, frame):
         """Draw what is believed as well as what was seen.
