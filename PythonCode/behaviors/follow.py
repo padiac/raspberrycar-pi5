@@ -72,13 +72,24 @@ from .reacquire import Reacquire
 #: Kept well clear of the safety layer's stop distance: closer than that and
 #: forward motion is refused, and the car would sit shuffling at a target it
 #: has been told to approach and is not allowed to reach.
-STANDOFF_CM = 45.0
+#:
+#: 55, not 45: at 45 a ball on the floor is half under the bottom of the
+#: picture and the finder stops being sure of it. See TARGET_FILL.
+STANDOFF_CM = 55.0
 DISTANCE_DEADBAND_CM = 8.0
 
 #: Fraction of frame height the target should fill. Only used when there is no
 #: distance reading to be had.
-TARGET_FILL = 0.45
-FILL_DEADBAND = 0.06
+#:
+#: Measured backing away from the ball (box height of 720, the finder's
+#: confidence): 322 px, 0.64 and falling to 0.45 nearer; 294, 0.89; 268,
+#: 0.85; 198, 0.83. The finder draws the whole ball even when part of it is
+#: below the picture, so the box does not shrink -- what goes is how sure it
+#: is, and with it the track, at the first turn. 0.36 is about 260 px, about
+#: 55cm, with the whole ball in view; the deadband keeps the near end under
+#: 295 px, where it is still sure.
+TARGET_FILL = 0.36
+FILL_DEADBAND = 0.05
 CENTRE_DEADBAND = 0.05
 
 #: The rangefinder looks where the car points, not where the camera is looking,

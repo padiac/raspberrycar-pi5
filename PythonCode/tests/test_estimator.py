@@ -340,6 +340,48 @@ for _ in range(30):
 truthy("and nothing coasts to a negative size", shrinking.size.value >= 0.0)
 
 print()
+print("something that looks like a ball beats something merely large")
+
+# Measured on the car: a window frame at 0.45 filling more of the picture
+# than the real ball at 0.82 beside it. The car turned to the window.
+window = ball(+0.6, fill=0.75, confidence=0.45)
+real = ball(-0.5, fill=0.65, confidence=0.82)
+picky = track(sure_size=0.012)
+picky.update([window, real], (WIDTH, HEIGHT), 0.05)
+close("starting with both in view, it starts on the ball", picky.offset, -0.5, 0.05)
+
+guess = track(sure_size=0.012)
+for _ in range(10):
+    guess.update([window], (WIDTH, HEIGHT), 0.05)
+close("with only the window in view it starts on the window", guess.offset, 0.6, 0.05)
+for _ in range(3):
+    guess.update([window, real], (WIDTH, HEIGHT), 0.05)
+close("  but gives it up the moment a real ball appears", guess.offset, -0.5, 0.05)
+
+vouched = track(sure_size=0.012)
+for _ in range(10):
+    vouched.update([real], (WIDTH, HEIGHT), 0.05)
+clipped = ball(-0.5, fill=0.65, confidence=0.50)
+other = ball(+0.6, fill=0.30, confidence=0.80)
+for _ in range(5):
+    vouched.update([clipped, other], (WIDTH, HEIGHT), 0.05)
+close("a track that once looked right keeps it when it looks worse", vouched.offset, -0.5, 0.05)
+
+print()
+print("size alone does not vouch for something cut off by the top of the picture")
+
+hanging = Detection("ball", 0.48, (100, -40, 300, 160), 200)
+standing = Detection("ball", 0.48, (100, 200, 300, 400), 200)
+roof = track(sure_size=0.012)
+roof.update([hanging], (WIDTH, HEIGHT), 0.05)
+check("a big doubtful box cut by the top starts nothing", roof.offset, None)
+roof.update([hanging, standing], (WIDTH, HEIGHT), 0.05)
+truthy("the same box on the floor does", roof.offset is not None and roof.box == standing.box)
+sure_roof = track(sure_size=0.012)
+sure_roof.update([Detection("ball", 0.85, (100, -40, 300, 160), 200)], (WIDTH, HEIGHT), 0.05)
+truthy("and a confident one cut by the top still does", sure_roof.offset is not None)
+
+print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
     sys.exit(1)

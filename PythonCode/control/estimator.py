@@ -300,6 +300,10 @@ class TargetTrack:
         #: can be told from something that has been there a while.
         self.seen = 0
         self.confidence = 0.0
+        #: The best the finder has ever thought of this track. A track that
+        #: began on size alone and has never once looked like the thing is
+        #: a guess, and gives way to anything that does.
+        self.best = 0.0
         self.box = None
 
     # -- the three settings, read live unless overridden for a test --------
@@ -338,6 +342,14 @@ class TargetTrack:
         width, height = frame_size
         picture = float(width) * float(height)
         if picture <= 0:
+            return False
+        # Size vouches for a thing cut off at the sides or the bottom -- a
+        # ball near the car, or at the edge of a turn. Not at the top: this
+        # camera looks slightly up, and something on the floor never reaches
+        # the top of the picture. What does is furniture. Measured on the
+        # car: window frames and the sofa at 0.42-0.52, 300 pixels square,
+        # every one of them cut by the top edge, taken for the ball.
+        if detection.box[1] <= 0:
             return False
         return (detection.area / picture) >= self.sure_size
 
@@ -436,7 +448,13 @@ class TargetTrack:
             sure = [d for d in mine if self._convincing(d, frame_size)]
             if not sure:
                 return None
-            return max(sure, key=lambda d: d.area)
+            # Something that looks like the thing beats something that is
+            # merely large. Measured on the car: a window frame at 0.45
+            # filled 8% of the picture, more than a real ball at 0.82
+            # beside it, and the car turned away from the ball to follow
+            # the window. Size only decides among equals.
+            looks = [d for d in sure if d.confidence >= self.confident]
+            return max(looks or sure, key=lambda d: d.area)
 
         best, best_gap = None, None
         for det in mine:
@@ -461,6 +479,15 @@ class TargetTrack:
         """
         self.predict(dt)
         self._since_new += max(0.0, dt)
+
+        # A track that has never looked like the thing gives way to one that
+        # does. Without this, "where it is beats what it looks like" kept the
+        # car on a window frame it had picked up by size, with the real ball
+        # at 0.82 in plain view beside it.
+        if self.x.known and self.best < self.confident and any(
+                d.label.lower() == self.label.lower()
+                and d.confidence >= self.confident for d in detections):
+            self.forget()
 
         chosen = self.choose(detections, frame_size)
         if chosen is None:
@@ -487,6 +514,7 @@ class TargetTrack:
         self.missed = 0
         self.seen += 1
         self.confidence = chosen.confidence
+        self.best = max(self.best, chosen.confidence)
         self.box = chosen.box
 
         self.x.correct(self._offset_of(chosen, width))
@@ -517,6 +545,7 @@ class TargetTrack:
         self.missed = 0
         self.seen = 0
         self.confidence = 0.0
+        self.best = 0.0
         self.box = None
         self._folded = None
         self._since_new = 0.0
